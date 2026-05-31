@@ -5,21 +5,28 @@ on:
   workflow_dispatch:
 
 env:
-  TARGET: amd64
-  TARGET_ARCH: amd64
   FREEBSD_BRANCH: releng/15.0
 
 jobs:
   modules:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: amd64
+            target_arch: amd64
+          - target: arm64
+            target_arch: aarch64
     container:
-      # Same SHA-pinned image the kernel was built in, so module source matches.
-      image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:${{ github.event.client_payload.image_tag || 'amd64-latest' }}
+      # Same per-arch toolchain image the kernel was built in, so module source
+      # matches. Cross-builds on the x86_64 runner (no emulation).
+      image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:${{ matrix.target }}-${{ github.event.client_payload.fbsd_sha && format('fbsd-{0}', github.event.client_payload.fbsd_sha) || 'latest' }}
     steps:
       - name: Download kernel obj tree
         uses: actions/download-artifact@v4
         with:
-          name: kernel-obj-amd64
+          name: kernel-obj-${{ matrix.target }}
           path: /usr/obj/
           # The run lives in the kernel repo, not here; without repository:
           # download-artifact looks in the current repo and 404s.
@@ -37,19 +44,17 @@ jobs:
             echo "Applying $p"
             git apply /tmp/nk/patches/$p
           done
-          cp /tmp/nk/config/NEXTBSD /usr/src/sys/amd64/conf/
+          cp /tmp/nk/config/NEXTBSD /usr/src/sys/${{ matrix.target }}/conf/
 
       - name: Build modules
         run: |
           cd /usr/src
           # MAKEOBJDIRPREFIX + CROSS_BINDIR inherited from the toolchain image.
-          # NOTE: NO_KERNEL=yes is intended to build modules against the
-          # already-built kernel obj. If buildkernel does not honor it on
-          # releng/15.0, switch to a sys/modules build here.
+          # NO_KERNEL=yes builds modules against the already-built kernel obj.
           ./tools/build/make.py \
             --cross-bindir="${CROSS_BINDIR}" \
-            TARGET="${TARGET}" \
-            TARGET_ARCH="${TARGET_ARCH}" \
+            TARGET="${{ matrix.target }}" \
+            TARGET_ARCH="${{ matrix.target_arch }}" \
             KERNCONF=NEXTBSD \
             NO_KERNEL=yes \
             buildkernel -j"$(nproc)"
@@ -57,18 +62,19 @@ jobs:
       - name: Upload modules artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nextbsd-modules-amd64
+          name: nextbsd-modules-${{ matrix.target }}
           path: /usr/obj/**/modules/
 
       - name: Create release
         if: github.event.client_payload.release == 'true'
         run: |
           cd /usr/obj
-          tar czf /tmp/nextbsd-modules-amd64.tar.gz $(find . -type d -name modules)
-          gh release create "v$(date +%Y%m%d)-modules" \
-            /tmp/nextbsd-modules-amd64.tar.gz \
+          tar czf /tmp/nextbsd-modules-${{ matrix.target }}.tar.gz $(find . -type d -name modules)
+          # Per-arch tag so the two matrix legs don't collide on one release.
+          gh release create "v$(date +%Y%m%d)-modules-${{ matrix.target }}" \
+            /tmp/nextbsd-modules-${{ matrix.target }}.tar.gz \
             --repo nextbsd-redux/nextbsd-kernel-modules \
-            --title "NextBSD Modules $(date +%Y-%m-%d)" \
+            --title "NextBSD Modules ${{ matrix.target }} $(date +%Y-%m-%d)" \
             --notes "Built against FreeBSD ${FREEBSD_BRANCH}"
         env:
           GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
