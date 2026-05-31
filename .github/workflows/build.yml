@@ -1,0 +1,68 @@
+name: Build NextBSD Modules
+on:
+  repository_dispatch:
+    types: [kernel-updated]
+  workflow_dispatch:
+
+env:
+  TARGET: amd64
+  TARGET_ARCH: amd64
+  FREEBSD_BRANCH: releng/15.0
+
+jobs:
+  modules:
+    runs-on: ubuntu-24.04
+    container:
+      # Same SHA-pinned image the kernel was built in, so module source matches.
+      image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:${{ github.event.client_payload.image_tag || 'amd64-latest' }}
+    steps:
+      - name: Download kernel obj tree
+        uses: actions/download-artifact@v4
+        with:
+          name: kernel-obj-amd64
+          path: /usr/obj/
+          run-id: ${{ github.event.client_payload.run_id }}
+          github-token: ${{ secrets.DISPATCH_TOKEN }}
+
+      - name: Apply patches to source
+        run: |
+          cd /usr/src
+          # /usr/src in the container is the unpatched baked tree; re-apply the
+          # same patches + config the kernel was built with.
+          git clone --depth 1 https://github.com/nextbsd-redux/nextbsd-kernel.git /tmp/nk
+          for p in $(cat /tmp/nk/patches/series); do
+            echo "Applying $p"
+            git apply /tmp/nk/patches/$p
+          done
+          cp /tmp/nk/config/NEXTBSD /usr/src/sys/amd64/conf/
+
+      - name: Build modules
+        run: |
+          cd /usr/src
+          # NOTE: NO_KERNEL=yes is intended to build modules against the
+          # already-built kernel obj. If buildkernel does not honor it on
+          # releng/15.0, switch to a sys/modules build here.
+          ./tools/build/make.py -j"$(nproc)" buildkernel \
+            TARGET="${TARGET}" \
+            TARGET_ARCH="${TARGET_ARCH}" \
+            KERNCONF=NEXTBSD \
+            NO_KERNEL=yes
+
+      - name: Upload modules artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextbsd-modules-amd64
+          path: /usr/obj/**/modules/
+
+      - name: Create release
+        if: github.event.client_payload.release == 'true'
+        run: |
+          cd /usr/obj
+          tar czf /tmp/nextbsd-modules-amd64.tar.gz $(find . -type d -name modules)
+          gh release create "v$(date +%Y%m%d)-modules" \
+            /tmp/nextbsd-modules-amd64.tar.gz \
+            --repo nextbsd-redux/nextbsd-kernel-modules \
+            --title "NextBSD Modules $(date +%Y-%m-%d)" \
+            --notes "Built against FreeBSD ${FREEBSD_BRANCH}"
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
