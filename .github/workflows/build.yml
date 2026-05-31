@@ -39,14 +39,17 @@ jobs:
       - name: Build modules
         run: |
           cd /usr/src
+          # MAKEOBJDIRPREFIX + CROSS_BINDIR inherited from the toolchain image.
           # NOTE: NO_KERNEL=yes is intended to build modules against the
           # already-built kernel obj. If buildkernel does not honor it on
           # releng/15.0, switch to a sys/modules build here.
-          ./tools/build/make.py -j"$(nproc)" buildkernel \
+          ./tools/build/make.py \
+            --cross-bindir="${CROSS_BINDIR}" \
             TARGET="${TARGET}" \
             TARGET_ARCH="${TARGET_ARCH}" \
             KERNCONF=NEXTBSD \
-            NO_KERNEL=yes
+            NO_KERNEL=yes \
+            buildkernel -j"$(nproc)"
 
       - name: Upload modules artifact
         uses: actions/upload-artifact@v4
