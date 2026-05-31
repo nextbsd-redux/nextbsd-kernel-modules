@@ -3,6 +3,14 @@ on:
   repository_dispatch:
     types: [kernel-updated]
   workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'nextbsd-kernel run ID that uploaded the kernel-obj-<arch> artifacts'
+        required: true
+      fbsd_sha:
+        description: 'Pinned FreeBSD SHA for the toolchain image tag (blank = latest)'
+        required: false
+        default: ''
 
 env:
   FREEBSD_BRANCH: releng/15.0
@@ -21,7 +29,7 @@ jobs:
     container:
       # Same per-arch toolchain image the kernel was built in, so module source
       # matches. Cross-builds on the x86_64 runner (no emulation).
-      image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:${{ matrix.target }}-${{ github.event.client_payload.fbsd_sha && format('fbsd-{0}', github.event.client_payload.fbsd_sha) || 'latest' }}
+      image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:${{ matrix.target }}-${{ (github.event.client_payload.fbsd_sha || inputs.fbsd_sha) && format('fbsd-{0}', github.event.client_payload.fbsd_sha || inputs.fbsd_sha) || 'latest' }}
     steps:
       - name: Download kernel obj tree
         uses: actions/download-artifact@v4
@@ -31,7 +39,7 @@ jobs:
           # The run lives in the kernel repo, not here; without repository:
           # download-artifact looks in the current repo and 404s.
           repository: nextbsd-redux/nextbsd-kernel
-          run-id: ${{ github.event.client_payload.run_id }}
+          run-id: ${{ github.event.client_payload.run_id || inputs.run_id }}
           github-token: ${{ secrets.DISPATCH_TOKEN }}
 
       - name: Apply patches to source
