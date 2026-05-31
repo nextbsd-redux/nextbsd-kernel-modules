@@ -21,6 +21,9 @@ jobs:
         with:
           name: kernel-obj-amd64
           path: /usr/obj/
+          # The run lives in the kernel repo, not here; without repository:
+          # download-artifact looks in the current repo and 404s.
+          repository: nextbsd-redux/nextbsd-kernel
           run-id: ${{ github.event.client_payload.run_id }}
           github-token: ${{ secrets.DISPATCH_TOKEN }}
 
