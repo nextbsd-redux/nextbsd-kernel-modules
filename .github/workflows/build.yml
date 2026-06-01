@@ -18,6 +18,8 @@ env:
 jobs:
   modules:
     runs-on: ubuntu-24.04
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
     strategy:
       fail-fast: false
       matrix:
@@ -42,6 +44,22 @@ jobs:
           run-id: ${{ github.event.client_payload.run_id || inputs.run_id }}
           github-token: ${{ secrets.DISPATCH_TOKEN }}
 
+      # ccache: modules is mostly compilation, so this is the biggest win.
+      # ccache is in the toolchain image; --cross-bindir points at its wrapper.
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-modules-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-modules-${{ matrix.target }}-
+
+      - name: ccache reset counters
+        run: |
+          ccache -o max_size=5G
+          ccache -z
+          ccache -s
+
       - name: Apply patches to source
         run: |
           cd /usr/src
@@ -57,15 +75,19 @@ jobs:
       - name: Build modules
         run: |
           cd /usr/src
-          # MAKEOBJDIRPREFIX + CROSS_BINDIR inherited from the toolchain image.
+          # --cross-bindir = ccache wrapper (cached compiles). MAKEOBJDIRPREFIX +
+          # CCACHE_CROSS_BINDIR inherited from the toolchain image.
           # NO_KERNEL=yes builds modules against the already-built kernel obj.
           ./tools/build/make.py \
-            --cross-bindir="${CROSS_BINDIR}" \
+            --cross-bindir="${CCACHE_CROSS_BINDIR}" \
             TARGET="${{ matrix.target }}" \
             TARGET_ARCH="${{ matrix.target_arch }}" \
             KERNCONF=NEXTBSD \
             NO_KERNEL=yes \
             buildkernel -j"$(nproc)"
+
+      - name: ccache stats (after build — hit rate is the proof)
+        run: ccache -s
 
       - name: Upload modules artifact
         uses: actions/upload-artifact@v4
