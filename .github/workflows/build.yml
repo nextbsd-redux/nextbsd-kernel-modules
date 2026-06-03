@@ -2,11 +2,14 @@ name: Build NextBSD Modules
 on:
   repository_dispatch:
     types: [kernel-updated]
+  pull_request:
+    # Validate the module cross-build (both arches) on PRs touching the
+    # workflow. The kernel obj tree now comes from nextbsd-kernel's rolling
+    # `continuous` release (always present), so a PR needs no run_id, and PR
+    # runs never publish — see the publish job's `if`.
+    paths: ['.github/workflows/build.yml']
   workflow_dispatch:
     inputs:
-      run_id:
-        description: 'nextbsd-kernel run ID that uploaded the kernel-obj-<arch> artifacts'
-        required: true
       fbsd_sha:
         description: 'Pinned FreeBSD SHA for the toolchain image tag (blank = latest)'
         required: false
@@ -33,16 +36,21 @@ jobs:
       # matches. Cross-builds on the x86_64 runner (no emulation).
       image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:${{ matrix.target }}-${{ (github.event.client_payload.fbsd_sha || inputs.fbsd_sha) && format('fbsd-{0}', github.event.client_payload.fbsd_sha || inputs.fbsd_sha) || 'latest' }}
     steps:
-      - name: Download kernel obj tree
-        uses: actions/download-artifact@v4
-        with:
-          name: kernel-obj-${{ matrix.target }}
-          path: /usr/obj/
-          # The run lives in the kernel repo, not here; without repository:
-          # download-artifact looks in the current repo and 404s.
-          repository: nextbsd-redux/nextbsd-kernel
-          run-id: ${{ github.event.client_payload.run_id || inputs.run_id }}
-          github-token: ${{ secrets.DISPATCH_TOKEN }}
+      - name: Download kernel obj tree from kernel continuous release
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          mkdir -p /usr/obj
+          # Pull the CI-gated kernel obj tree from nextbsd-kernel's rolling
+          # `continuous` release. It's always present (only a green main build
+          # refreshes it) and needs no run_id — which is what lets this build
+          # run on PRs. The tarball is rooted at /usr/obj's contents, so it
+          # restores the same layout the old download-artifact produced.
+          gh release download continuous \
+            --repo nextbsd-redux/nextbsd-kernel \
+            --pattern "kernel-obj-${{ matrix.target }}.tar.gz" \
+            --output /tmp/kernel-obj.tar.gz --clobber
+          tar -C /usr/obj -xzf /tmp/kernel-obj.tar.gz
 
       # ccache: modules is mostly compilation, so this is the biggest win.
       # ccache is in the toolchain image; --cross-bindir points at its wrapper.
@@ -108,3 +116,50 @@ jobs:
             --notes "Built against FreeBSD ${FREEBSD_BRANCH}"
         env:
           GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+
+  # Refresh the rolling `continuous` release from a successful main build, so
+  # nextbsd ingests a stable, CI-gated module tree instead of scraping the
+  # latest main run artifact. Single non-matrix job (collects both arches,
+  # publishes once — no release-creation race). PRs build but never reach here.
+  publish:
+    name: publish continuous
+    needs: modules
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package per-arch assets
+        run: |
+          mkdir -p out
+          for arch in amd64 arm64; do
+            # nextbsd-modules-<arch>.tar.gz: the built *.ko module tree,
+            # consumed by nextbsd (installs them into /boot/kernel on the ISO).
+            if [ -d "artifacts/nextbsd-modules-$arch" ]; then
+              tar -C "artifacts/nextbsd-modules-$arch" -czf "out/nextbsd-modules-$arch.tar.gz" .
+            fi
+          done
+          ls -lh out/
+
+      # Stable asset names → each publish overwrites in place; no stale pileup.
+      - name: Publish to continuous release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: continuous
+          name: Continuous modules build
+          body: |
+            Rolling module build, refreshed on every successful `main` build.
+            Consumed by nextbsd (`nextbsd-modules-<arch>.tar.gz`).
+
+            Build log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Commit: ${{ github.sha }}
+          prerelease: true
+          target_commitish: ${{ github.sha }}
+          fail_on_unmatched_files: true
+          files: |
+            out/*.tar.gz
