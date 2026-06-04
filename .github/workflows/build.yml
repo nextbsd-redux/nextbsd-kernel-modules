@@ -7,7 +7,10 @@ on:
     # workflow. The kernel obj tree now comes from nextbsd-kernel's rolling
     # `continuous` release (always present), so a PR needs no run_id, and PR
     # runs never publish — see the publish job's `if`.
-    paths: ['.github/workflows/build.yml']
+    paths:
+      - '.github/workflows/build.yml'
+      - 'tools/ko2kext.sh'
+      - 'tests/kext-boot-test.sh'
   workflow_dispatch:
     inputs:
       fbsd_sha:
@@ -116,6 +119,103 @@ jobs:
             --notes "Built against FreeBSD ${FREEBSD_BRANCH}"
         env:
           GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+
+  # PR-only kext proof-of-concept (#183): convert a leaf .ko to a .kext and
+  # prove it loads via the Apple-shaped kextload in a booted VM. Wraps nmdm.ko
+  # (null-modem pseudo-tty — a dependency-free leaf, so no dep resolution is
+  # needed) and boots the nextbsd `continuous` image, which must already ship
+  # the kextload/kextstat/kextunload trio (nextbsd Phase 1). Mirrors the
+  # nextbsd-kernel boot smoke test. PR-only, never publishes.
+  kext-smoke-test:
+    name: kext PoC (convert nmdm.ko -> .kext, kextload in a booted VM)
+    needs: modules
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout (tools/ + tests/)
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: false
+
+      - name: Download built modules (amd64)
+        uses: actions/download-artifact@v4
+        with:
+          name: nextbsd-modules-amd64
+          path: modules-dl
+
+      - name: Convert nmdm.ko -> Nmdm.kext
+        run: |
+          KO=$(find modules-dl -type f -name nmdm.ko | head -1)
+          test -n "$KO" || { echo "nmdm.ko not found in modules artifact" >&2; find modules-dl -name '*.ko' | head; exit 1; }
+          echo "==> wrapping $KO"
+          chmod +x tools/ko2kext.sh
+          tools/ko2kext.sh "$KO" Nmdm org.nextbsd.kext.nmdm
+          ls -lR Nmdm.kext
+
+      - name: Download nextbsd continuous image
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          gh release download continuous -R nextbsd-redux/nextbsd \
+            --pattern '*.img.zip' --dir iso --clobber
+          MEMBER=$(unzip -Z1 iso/*.img.zip | grep -E '\.img$' | head -1)
+          [ -n "$MEMBER" ] || { echo "no .img member in published zip" >&2; exit 1; }
+          unzip -p iso/*.img.zip "$MEMBER" > disk.img
+          rm -rf iso
+          ls -lh disk.img
+
+      # Root is freebsd-ufs (not writable from Linux): md-attach the image,
+      # mount ROOTFS, drop Nmdm.kext into /System/Library/Extensions, unmount.
+      # copyback brings the mutated disk.img back to the runner.
+      - name: Inject Nmdm.kext into the image's UFS root
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: '15.0'
+          usesh: true
+          sync: rsync
+          copyback: true
+          run: |
+            set -eu
+            md=$(mdconfig -a -t vnode -f disk.img)
+            gpart show -p "$md"
+            part=$(gpart show -p "$md" | awk '/freebsd-ufs/{print $3; exit}')
+            [ -n "$part" ] || { echo "no freebsd-ufs partition" >&2; exit 1; }
+            mkdir -p /mnt-root
+            mount "/dev/$part" /mnt-root
+            mkdir -p /mnt-root/System/Library/Extensions
+            cp -R Nmdm.kext /mnt-root/System/Library/Extensions/
+            ls -lR /mnt-root/System/Library/Extensions/Nmdm.kext
+            umount /mnt-root
+            mdconfig -d -u "$md"
+            echo "==> Nmdm.kext injected"
+
+      - name: Install qemu + expect + OVMF
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 expect ovmf
+
+      - name: Boot test (kextload the converted kext)
+        run: |
+          chmod +x tests/kext-boot-test.sh
+          ./tests/kext-boot-test.sh disk.img
+
+      - name: Upload kext boot log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kext-boot-log
+          path: tests/kext-boot.log
+          if-no-files-found: ignore
 
   # Refresh the rolling `continuous` release from a successful main build, so
   # nextbsd ingests a stable, CI-gated module tree instead of scraping the
