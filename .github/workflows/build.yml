@@ -194,6 +194,11 @@ jobs:
             mount "/dev/$part" /mnt-root
             mkdir -p /mnt-root/System/Library/Extensions
             cp -R Nmdm.kext /mnt-root/System/Library/Extensions/
+            # OSKext authenticates kexts: every bundle component must be
+            # root:wheel and not group/other-writable (cp -R into the VM does
+            # not guarantee this). This mirrors how kexts must be deployed.
+            chown -R root:wheel /mnt-root/System/Library/Extensions/Nmdm.kext
+            chmod -R go-w /mnt-root/System/Library/Extensions/Nmdm.kext
             ls -lR /mnt-root/System/Library/Extensions/Nmdm.kext
             umount /mnt-root
             mdconfig -d -u "$md"
