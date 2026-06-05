@@ -127,7 +127,7 @@ jobs:
   # the kextload/kextstat/kextunload trio (nextbsd Phase 1). Mirrors the
   # nextbsd-kernel boot smoke test. PR-only, never publishes.
   kext-smoke-test:
-    name: kext PoC (convert nmdm.ko -> .kext, kextload in a booted VM)
+    name: kext PoC (Nmdm.kext load/unload + IntelWiFi.kext load, in a booted VM)
     needs: modules
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
@@ -153,14 +153,25 @@ jobs:
           name: nextbsd-modules-amd64
           path: modules-dl
 
-      - name: Convert nmdm.ko -> Nmdm.kext
+      - name: Convert nmdm.ko -> Nmdm.kext and if_iwlwifi.ko -> IntelWiFi.kext
         run: |
+          chmod +x tools/ko2kext.sh
+          # Nmdm.kext: dependency-free leaf — full load/unload canary.
           KO=$(find modules-dl -type f -name nmdm.ko | head -1)
           test -n "$KO" || { echo "nmdm.ko not found in modules artifact" >&2; find modules-dl -name '*.ko' | head; exit 1; }
           echo "==> wrapping $KO"
-          chmod +x tools/ko2kext.sh
           tools/ko2kext.sh "$KO" Nmdm org.nextbsd.kext.nmdm
           ls -lR Nmdm.kext
+          # IntelWiFi.kext: if_iwlwifi — Tier-0 real driver. Its linuxkpi /
+          # linuxkpi_wlan deps are baked into the kernel (options COMPAT_LINUXKPI
+          # + device wlan), so it needs no OSBundleLibraries. Firmware is bundled
+          # separately (follow-up); not needed for the load-only proof since no
+          # Intel WiFi device attaches in QEMU.
+          IWKO=$(find modules-dl -type f -name if_iwlwifi.ko | head -1)
+          test -n "$IWKO" || { echo "if_iwlwifi.ko not found in modules artifact" >&2; find modules-dl -name 'if_*.ko' | head; exit 1; }
+          echo "==> wrapping $IWKO"
+          tools/ko2kext.sh "$IWKO" IntelWiFi org.nextbsd.kext.intelwifi
+          ls -lR IntelWiFi.kext
 
       - name: Download nextbsd continuous image
         env:
@@ -177,7 +188,7 @@ jobs:
       # Root is freebsd-ufs (not writable from Linux): md-attach the image,
       # mount ROOTFS, drop Nmdm.kext into /System/Library/Extensions, unmount.
       # copyback brings the mutated disk.img back to the runner.
-      - name: Inject Nmdm.kext into the image's UFS root
+      - name: Inject Nmdm.kext + IntelWiFi.kext into the image's UFS root
         uses: vmactions/freebsd-vm@v1
         with:
           release: '15.0'
@@ -193,16 +204,18 @@ jobs:
             mkdir -p /mnt-root
             mount "/dev/$part" /mnt-root
             mkdir -p /mnt-root/System/Library/Extensions
-            cp -R Nmdm.kext /mnt-root/System/Library/Extensions/
+            cp -R Nmdm.kext IntelWiFi.kext /mnt-root/System/Library/Extensions/
             # OSKext authenticates kexts: every bundle component must be
             # root:wheel and not group/other-writable (cp -R into the VM does
             # not guarantee this). This mirrors how kexts must be deployed.
-            chown -R root:wheel /mnt-root/System/Library/Extensions/Nmdm.kext
-            chmod -R go-w /mnt-root/System/Library/Extensions/Nmdm.kext
-            ls -lR /mnt-root/System/Library/Extensions/Nmdm.kext
+            chown -R root:wheel /mnt-root/System/Library/Extensions/Nmdm.kext \
+                                /mnt-root/System/Library/Extensions/IntelWiFi.kext
+            chmod -R go-w /mnt-root/System/Library/Extensions/Nmdm.kext \
+                          /mnt-root/System/Library/Extensions/IntelWiFi.kext
+            ls -lR /mnt-root/System/Library/Extensions/
             umount /mnt-root
             mdconfig -d -u "$md"
-            echo "==> Nmdm.kext injected"
+            echo "==> Nmdm.kext + IntelWiFi.kext injected"
 
       - name: Install qemu + expect + OVMF
         run: |

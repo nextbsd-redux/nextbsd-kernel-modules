@@ -1,8 +1,12 @@
 #!/bin/sh
-# kext-boot-test.sh — boot the NextBSD continuous image (with Nmdm.kext
-# pre-injected at /System/Library/Extensions) under qemu/UEFI, log in, and
-# prove the kext loads end-to-end: kextload -> kextstat shows it ->
-# kextunload -> it's gone.
+# kext-boot-test.sh — boot the NextBSD continuous image (with Nmdm.kext and
+# IntelWiFi.kext pre-injected at /System/Library/Extensions) under qemu/UEFI,
+# log in, and prove kexts load end-to-end:
+#   Nmdm.kext     — full lifecycle: kextload -> kextstat -> kextunload -> gone.
+#   IntelWiFi.kext (if_iwlwifi) — load-only: kextload -> kextstat. Its linuxkpi/
+#                   linuxkpi_wlan deps are baked into the kernel so it has no
+#                   kext dependencies; a WiFi driver isn't unloaded here (no
+#                   device attaches in QEMU and real ones may not unload cleanly).
 #
 # NextBSD kext proof-of-concept (#183). Loader/login/halt stages are modeled
 # on nextbsd tests/boot-test.sh; only the test stage differs (kext assertions
@@ -51,7 +55,8 @@ done
 echo "==> using UEFI firmware: $OVMF"
 
 KEXT_PATH=/System/Library/Extensions/Nmdm.kext
-export ACCEL_FLAGS OVMF KEXT_PATH
+IWIFI_PATH=/System/Library/Extensions/IntelWiFi.kext
+export ACCEL_FLAGS OVMF KEXT_PATH IWIFI_PATH
 
 cat > "$EXP" <<'EOF'
 set timeout 480
@@ -61,6 +66,7 @@ log_user 1
 set img [lindex $argv 0]
 set accel_flags [split $env(ACCEL_FLAGS) " "]
 set kext $env(KEXT_PATH)
+set iwifi $env(IWIFI_PATH)
 
 eval spawn qemu-system-x86_64 \
     -m 4G \
@@ -140,7 +146,28 @@ expect {
     "GONE_YES" { puts "\nOK: KEXT-GONE (unloaded cleanly)" }
 }
 
-puts "\nKEXT-POC-OK: convert -> kextload -> kextstat -> kextunload all passed"
+# Stage 7: IntelWiFi.kext (if_iwlwifi) — load-only proof. linuxkpi and
+# linuxkpi_wlan are baked into the kernel, so it loads with no kext deps. No
+# Intel WiFi device attaches in QEMU, so the driver loads but stays idle.
+send "kextload $iwifi\r"
+expect {
+    timeout { puts "\nFAIL: INTELWIFI-LOAD timed out"; exit 1 }
+    "kextload: loaded"      { puts "\nOK: INTELWIFI-LOAD (if_iwlwifi kldload succeeded)" }
+    "already loaded"        { puts "\nOK: INTELWIFI-LOAD (already loaded)" }
+    -re {kldload\([^\n]*\n}  { puts "\nFAIL: IntelWiFi errored on kldload: $expect_out(0,string)"; exit 1 }
+    -re "not a bundle"      { puts "\nFAIL: CFBundle could not open IntelWiFi.kext"; exit 1 }
+}
+
+# Stage 8: kextstat shows it. Echo-split sentinel so the marker never appears
+# in the echoed command — match the loaded file (IntelWiFi) or module (iwlwifi).
+send "kextstat | grep -Eqi 'intelwifi|iwlwifi' && echo IWIFI''_PRESENT || echo IWIFI''_ABSENT\r"
+expect {
+    timeout { puts "\nFAIL: INTELWIFI-STAT timed out"; exit 1 }
+    "IWIFI_ABSENT"  { puts "\nFAIL: IntelWiFi loaded but not visible in kextstat"; exit 1 }
+    "IWIFI_PRESENT" { puts "\nOK: INTELWIFI-STAT (driver visible via kldstat)" }
+}
+
+puts "\nKEXT-POC-OK: Nmdm load/stat/unload + IntelWiFi load/stat all passed"
 
 # Stage 7: clean halt.
 send "halt -p\r"
