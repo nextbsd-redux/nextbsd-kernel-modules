@@ -111,7 +111,7 @@ expect {
     timeout { puts "\nFAIL: KEXT-LOAD timed out"; exit 1 }
     "kextload: loaded"  { puts "\nOK: KEXT-LOAD (kldload of the bundled .ko succeeded)" }
     "already loaded"    { puts "\nOK: KEXT-LOAD (already loaded)" }
-    -re "kldload\\("    { puts "\nFAIL: kextload errored on kldload"; exit 1 }
+    -re {kldload\([^\r\n]*} { puts "\nFAIL: kextload errored on kldload: $expect_out(0,string)"; exit 1 }
     -re "not a bundle"  { puts "\nFAIL: CFBundle could not open the .kext"; exit 1 }
 }
 
