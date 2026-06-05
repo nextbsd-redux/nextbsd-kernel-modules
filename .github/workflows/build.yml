@@ -164,13 +164,24 @@ jobs:
           ls -lR Nmdm.kext
           # IntelWiFi.kext: if_iwlwifi — Tier-0 real driver. Its linuxkpi /
           # linuxkpi_wlan deps are baked into the kernel (options COMPAT_LINUXKPI
-          # + device wlan), so it needs no OSBundleLibraries. Firmware is bundled
-          # separately (follow-up); not needed for the load-only proof since no
-          # Intel WiFi device attaches in QEMU.
+          # + device wlan), so it needs no OSBundleLibraries.
           IWKO=$(find modules-dl -type f -name if_iwlwifi.ko | head -1)
           test -n "$IWKO" || { echo "if_iwlwifi.ko not found in modules artifact" >&2; find modules-dl -name 'if_*.ko' | head; exit 1; }
-          echo "==> wrapping $IWKO"
-          tools/ko2kext.sh "$IWKO" IntelWiFi org.nextbsd.kext.intelwifi
+          # Bundle the Intel 8260 firmware (+ its license) inside the kext,
+          # Apple-style, from a pinned linux-firmware tag. Intel permits
+          # unmodified binary redistribution provided the licence text ships
+          # alongside it, so both go into Contents/Resources/firmware. The
+          # kernel finds them via the firmware_path search list (nextbsd-kernel
+          # patch 0004 + the image's loader.conf). iwlwifi only fetches firmware
+          # at device attach, so this is inert in the QEMU load test but is what
+          # makes the driver work on real Intel 8260 hardware.
+          FW_TAG=20260519
+          FW_BASE="https://gitlab.com/kernel-firmware/linux-firmware/-/raw/${FW_TAG}"
+          curl -fL --retry 3 -o iwlwifi-8000C-36.ucode "${FW_BASE}/intel/iwlwifi/iwlwifi-8000C-36.ucode"
+          curl -fL --retry 3 -o LICENCE.iwlwifi_firmware "${FW_BASE}/LICENCE.iwlwifi_firmware"
+          echo "==> wrapping $IWKO (with iwlwifi-8000C-36.ucode firmware)"
+          tools/ko2kext.sh -f iwlwifi-8000C-36.ucode -f LICENCE.iwlwifi_firmware \
+              "$IWKO" IntelWiFi org.nextbsd.kext.intelwifi
           ls -lR IntelWiFi.kext
 
       - name: Download nextbsd continuous image
