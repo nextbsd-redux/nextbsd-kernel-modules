@@ -24,8 +24,10 @@ usage: ko2kext.sh [-o outdir] [-v version] [-l dep-bundle-id]... [-f firmware]..
   -v version       CFBundleVersion                   (default: 1.0)
   -l dep-bundle-id add an OSBundleLibraries dependency (repeatable)
                      e.g. -l org.nextbsd.kpi.LinuxKPIWlan
-  -f firmware      bundle a firmware file (or dir) into Contents/Resources/firmware
-                     (repeatable)
+  -f firmware      bundle firmware into Contents/Resources/firmware (repeatable).
+                     A file is copied in; a directory has its contents copied in
+                     flat (symlinks dereferenced) so e.g. all iwlwifi *.ucode
+                     land directly under firmware/ where firmware(9) finds them.
 
   e.g. ko2kext.sh -l org.nextbsd.kpi.LinuxKPIWlan \
                   if_iwlwifi.ko IntelWiFi org.nextbsd.driver.IntelWiFi
@@ -67,7 +69,14 @@ if [ -n "$FWS" ]; then
 	printf '%s' "$FWS" | while IFS= read -r fw; do
 		[ -n "$fw" ] || continue
 		[ -e "$fw" ] || { echo "ko2kext: firmware not found: $fw" >&2; exit 1; }
-		cp -R "$fw" "${KEXT}/Contents/Resources/firmware/"
+		if [ -d "$fw" ]; then
+			# Directory: copy its contents flat into firmware/, dereferencing
+			# symlinks so versioned firmware (linux-firmware uses symlinks) is
+			# stored as real files the kernel can open by the requested name.
+			cp -RL "$fw"/. "${KEXT}/Contents/Resources/firmware/"
+		else
+			cp -L "$fw" "${KEXT}/Contents/Resources/firmware/"
+		fi
 	done
 fi
 
