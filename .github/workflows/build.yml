@@ -167,19 +167,16 @@ jobs:
           # + device wlan), so it needs no OSBundleLibraries.
           IWKO=$(find modules-dl -type f -name if_iwlwifi.ko | head -1)
           test -n "$IWKO" || { echo "if_iwlwifi.ko not found in modules artifact" >&2; find modules-dl -name 'if_*.ko' | head; exit 1; }
-          # Bundle the Intel 8260 firmware (+ its license) inside the kext,
-          # Apple-style, from a pinned linux-firmware tag. Intel permits
-          # unmodified binary redistribution provided the licence text ships
-          # alongside it, so both go into Contents/Resources/firmware. The
-          # kernel finds them via the firmware_path search list (nextbsd-kernel
-          # patch 0004 + the image's loader.conf). iwlwifi only fetches firmware
-          # at device attach, so this is inert in the QEMU load test but is what
-          # makes the driver work on real Intel 8260 hardware.
+          # Boot-test bundle stays lightweight: it only proves the kext LOADS
+          # (firmware is untouched in QEMU and ~200MB of it would overflow the
+          # fixed-size test image). One small firmware file exercises the bundle
+          # path end-to-end. The FULL iwlwifi firmware set is bundled into the
+          # SHIPPED kext by the publish (continuous) job below.
           FW_TAG=20260519
           FW_BASE="https://gitlab.com/kernel-firmware/linux-firmware/-/raw/${FW_TAG}"
           curl -fL --retry 3 -o iwlwifi-8000C-36.ucode "${FW_BASE}/intel/iwlwifi/iwlwifi-8000C-36.ucode"
           curl -fL --retry 3 -o LICENCE.iwlwifi_firmware "${FW_BASE}/LICENCE.iwlwifi_firmware"
-          echo "==> wrapping $IWKO (with iwlwifi-8000C-36.ucode firmware)"
+          echo "==> wrapping $IWKO (with a sample iwlwifi firmware file)"
           tools/ko2kext.sh -f iwlwifi-8000C-36.ucode -f LICENCE.iwlwifi_firmware \
               "$IWKO" IntelWiFi org.nextbsd.kext.intelwifi
           ls -lR IntelWiFi.kext
@@ -258,6 +255,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout (tools/)
+        uses: actions/checkout@v4
+
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -275,6 +275,33 @@ jobs:
           done
           ls -lh out/
 
+      # Build the SHIPPED IntelWiFi.kext (amd64) with the FULL Intel iwlwifi
+      # firmware set bundled in, and publish it as intelwifi-kext.tar.gz on the
+      # continuous release (picked up by out/*.tar.gz below). nextbsd installs it
+      # into the ISO's /System/Library/Extensions; the kernel finds the firmware
+      # via the firmware_path search list (nextbsd-kernel patch 0004) once the
+      # image's loader.conf points at the kext's firmware dir. One kext supports
+      # every iwlwifi model (7260 .. AX210 .. BE200). Intel permits unmodified
+      # binary redistribution provided the licence ships alongside (bundled).
+      - name: Build + bundle IntelWiFi.kext (full iwlwifi firmware)
+        run: |
+          chmod +x tools/ko2kext.sh
+          IWKO=$(find artifacts/nextbsd-modules-amd64 -type f -name if_iwlwifi.ko | head -1)
+          if [ -z "$IWKO" ]; then
+            echo "WARN: if_iwlwifi.ko not in modules artifact — skipping IntelWiFi.kext"
+          else
+            FW_TAG=20260519
+            rm -rf lf
+            git clone --depth 1 --branch "$FW_TAG" --filter=blob:none --sparse \
+                https://gitlab.com/kernel-firmware/linux-firmware.git lf
+            ( cd lf && git sparse-checkout set --no-cone intel/iwlwifi LICENCE.iwlwifi_firmware )
+            cp -L lf/LICENCE.iwlwifi_firmware lf/intel/iwlwifi/
+            tools/ko2kext.sh -f lf/intel/iwlwifi "$IWKO" IntelWiFi org.nextbsd.kext.intelwifi
+            echo "==> IntelWiFi.kext: $(find IntelWiFi.kext/Contents/Resources/firmware -type f | wc -l) firmware files, $(du -sh IntelWiFi.kext | cut -f1)"
+            tar -czf out/intelwifi-kext.tar.gz IntelWiFi.kext
+            ls -lh out/intelwifi-kext.tar.gz
+          fi
+
       # Stable asset names → each publish overwrites in place; no stale pileup.
       - name: Publish to continuous release
         uses: softprops/action-gh-release@v2
@@ -283,7 +310,10 @@ jobs:
           name: Continuous modules build
           body: |
             Rolling module build, refreshed on every successful `main` build.
-            Consumed by nextbsd (`nextbsd-modules-<arch>.tar.gz`).
+            Consumed by nextbsd: `nextbsd-modules-<arch>.tar.gz` (the *.ko tree,
+            installed into /boot/kernel) and `intelwifi-kext.tar.gz` (the
+            IntelWiFi.kext bundle with the full iwlwifi firmware set, installed
+            into /System/Library/Extensions).
 
             Build log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
             Commit: ${{ github.sha }}
