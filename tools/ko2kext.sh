@@ -18,7 +18,7 @@ set -eu
 
 usage() {
 	cat >&2 <<'U'
-usage: ko2kext.sh [-o outdir] [-v version] [-l dep-bundle-id]... [-f firmware]... <input.ko> <Name> <bundle-id>
+usage: ko2kext.sh [-o outdir] [-v version] [-l dep-bundle-id]... [-f firmware]... [-p personalities] <input.ko> <Name> <bundle-id>
 
   -o outdir        where to write <Name>.kext       (default: .)
   -v version       CFBundleVersion                   (default: 1.0)
@@ -28,6 +28,10 @@ usage: ko2kext.sh [-o outdir] [-v version] [-l dep-bundle-id]... [-f firmware]..
                      A file is copied in; a directory has its contents copied in
                      flat (symlinks dereferenced) so e.g. all iwlwifi *.ucode
                      land directly under firmware/ where firmware(9) finds them.
+  -p personalities file holding a ready-made `<key>IOKitPersonalities</key>
+                     <dict>...</dict>` block (e.g. from gen-iwlwifi-personalities.sh)
+                     to inject into Info.plist. This is the device-id match table
+                     the in-kernel IOService matcher reads to bind the driver.
 
   e.g. ko2kext.sh -l org.nextbsd.kpi.LinuxKPIWlan \
                   if_iwlwifi.ko IntelWiFi org.nextbsd.driver.IntelWiFi
@@ -39,7 +43,8 @@ OUTDIR="."
 VERSION="1.0"
 DEPS=""        # newline-separated bundle ids
 FWS=""         # newline-separated firmware paths
-while getopts "o:v:l:f:h" opt; do
+PERS=""        # path to an IOKitPersonalities plist fragment
+while getopts "o:v:l:f:p:h" opt; do
 	case "$opt" in
 	o) OUTDIR="$OPTARG" ;;
 	v) VERSION="$OPTARG" ;;
@@ -47,6 +52,7 @@ while getopts "o:v:l:f:h" opt; do
 " ;;
 	f) FWS="${FWS}${OPTARG}
 " ;;
+	p) PERS="$OPTARG" ;;
 	*) usage ;;
 	esac
 done
@@ -99,6 +105,17 @@ EOF
 "
 fi
 
+# IOKitPersonalities block (-p): the device-id match table. Injected verbatim;
+# the generator (e.g. gen-iwlwifi-personalities.sh) emits a complete
+# `<key>IOKitPersonalities</key><dict>...</dict>` block already indented for the
+# top-level Info.plist dict.
+IOKP=""
+if [ -n "$PERS" ]; then
+	[ -f "$PERS" ] || { echo "ko2kext: personalities file not found: $PERS" >&2; exit 1; }
+	IOKP="$(cat "$PERS")
+"
+fi
+
 cat > "${KEXT}/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -120,7 +137,7 @@ cat > "${KEXT}/Contents/Info.plist" <<EOF
 	<string>${VERSION}</string>
 	<key>CFBundleVersion</key>
 	<string>${VERSION}</string>
-${OSBL}	<key>OSBundleRequired</key>
+${OSBL}${IOKP}	<key>OSBundleRequired</key>
 	<string>Root</string>
 </dict>
 </plist>
@@ -129,4 +146,5 @@ EOF
 echo "ko2kext: wrote ${KEXT}"
 [ -n "$DEPS" ] && echo "ko2kext:   OSBundleLibraries: $(printf '%s' "$DEPS" | tr '\n' ' ')"
 [ -n "$FWS" ]  && echo "ko2kext:   firmware: $(ls "${KEXT}/Contents/Resources/firmware" 2>/dev/null | tr '\n' ' ')"
+[ -n "$PERS" ] && echo "ko2kext:   IOKitPersonalities: injected from $(basename "$PERS")"
 exit 0
