@@ -100,6 +100,29 @@ jobs:
       - name: ccache stats (after build — hit rate is the proof)
         run: ccache -s
 
+      # P1 (#213) PROBE: confirm kldxref/devmatch availability + the devmatch -d
+      # dump format for if_iwlwifi.ko's MODULE_PNP_INFO, so we can generate
+      # IOKitPersonalities from it. Throwaway probe step (amd64 only).
+      - name: PNP probe (P1 #213)
+        if: matrix.target == 'amd64'
+        run: |
+          set +e
+          echo "tools: kldxref=$(command -v kldxref) devmatch=$(command -v devmatch)"
+          IWKO=$(find /usr/obj -type f -name if_iwlwifi.ko | head -1)
+          echo "if_iwlwifi.ko: ${IWKO:-<not found>}"
+          [ -n "$IWKO" ] || { find /usr/obj -name 'if_*.ko' | head; exit 0; }
+          D=$(dirname "$IWKO")
+          if command -v kldxref >/dev/null 2>&1; then
+            kldxref "$D" && echo "kldxref ok: $(ls -l "$D"/linker.hints 2>&1)"
+          fi
+          if command -v devmatch >/dev/null 2>&1 && [ -f "$D/linker.hints" ]; then
+            echo "=== devmatch -d dump (first 60 lines) ==="
+            devmatch -d -h "$D/linker.hints" 2>&1 | sed -n '1,60p'
+          else
+            echo "no devmatch or no hints; linker.hints head (hex):"
+            [ -f "$D/linker.hints" ] && hexdump -C "$D/linker.hints" | head -20
+          fi
+
       - name: Upload modules artifact
         uses: actions/upload-artifact@v4
         with:
