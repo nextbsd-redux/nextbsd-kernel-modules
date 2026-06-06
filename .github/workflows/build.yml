@@ -10,6 +10,7 @@ on:
     paths:
       - '.github/workflows/build.yml'
       - 'tools/ko2kext.sh'
+      - 'tools/gen-iwlwifi-personalities.sh'
       - 'tests/kext-boot-test.sh'
   workflow_dispatch:
     inputs:
@@ -100,6 +101,37 @@ jobs:
       - name: ccache stats (after build — hit rate is the proof)
         run: ccache -s
 
+      # P1 (#213): generate the IntelWiFi IOKitPersonalities (device-id match
+      # table) from the iwlwifi driver source in /usr/src — the data the
+      # in-kernel IOService matcher (K2/K3) reads to bind the driver. Apple kexts
+      # carry this in Info.plist; we derive it from the driver's own PCI id table
+      # (faithful + robust — no kldxref needed). amd64 only (arch-independent;
+      # IntelWiFi.kext is amd64); uploaded for the kext + publish jobs.
+      - name: Checkout tools (for the personalities generator)
+        if: matrix.target == 'amd64'
+        uses: actions/checkout@v4
+        with:
+          path: nbkm-tools
+
+      - name: Generate IntelWiFi IOKitPersonalities (P1 #213)
+        if: matrix.target == 'amd64'
+        run: |
+          chmod +x nbkm-tools/tools/gen-iwlwifi-personalities.sh
+          DRV=/usr/src/sys/contrib/dev/iwlwifi/pcie/drv.c
+          test -f "$DRV" || { echo "iwlwifi drv.c not found at $DRV" >&2; exit 1; }
+          mkdir -p personalities
+          nbkm-tools/tools/gen-iwlwifi-personalities.sh "$DRV" \
+              org.nextbsd.kext.intelwifi IntelWiFi > personalities/IntelWiFi.iokitpersonalities
+          echo "=== generated ==="
+          cat personalities/IntelWiFi.iokitpersonalities
+
+      - name: Upload IntelWiFi personalities artifact
+        if: matrix.target == 'amd64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: intelwifi-personalities
+          path: personalities/IntelWiFi.iokitpersonalities
+
       - name: Upload modules artifact
         uses: actions/upload-artifact@v4
         with:
@@ -153,6 +185,12 @@ jobs:
           name: nextbsd-modules-amd64
           path: modules-dl
 
+      - name: Download IntelWiFi personalities
+        uses: actions/download-artifact@v4
+        with:
+          name: intelwifi-personalities
+          path: personalities
+
       - name: Convert nmdm.ko -> Nmdm.kext and if_iwlwifi.ko -> IntelWiFi.kext
         run: |
           chmod +x tools/ko2kext.sh
@@ -176,10 +214,29 @@ jobs:
           FW_BASE="https://gitlab.com/kernel-firmware/linux-firmware/-/raw/${FW_TAG}"
           curl -fL --retry 3 -o iwlwifi-8000C-36.ucode "${FW_BASE}/intel/iwlwifi/iwlwifi-8000C-36.ucode"
           curl -fL --retry 3 -o LICENCE.iwlwifi_firmware "${FW_BASE}/LICENCE.iwlwifi_firmware"
-          echo "==> wrapping $IWKO (with a sample iwlwifi firmware file)"
+          echo "==> wrapping $IWKO (with a sample iwlwifi firmware file + IOKitPersonalities)"
+          PERS=personalities/IntelWiFi.iokitpersonalities
+          test -f "$PERS" || { echo "personalities fragment missing: $PERS" >&2; exit 1; }
           tools/ko2kext.sh -f iwlwifi-8000C-36.ucode -f LICENCE.iwlwifi_firmware \
+              -p "$PERS" \
               "$IWKO" IntelWiFi org.nextbsd.kext.intelwifi
           ls -lR IntelWiFi.kext
+
+      - name: Validate IntelWiFi.kext Info.plist + IOKitPersonalities
+        run: |
+          python3 - <<'PY'
+          import plistlib, sys
+          with open('IntelWiFi.kext/Contents/Info.plist','rb') as f:
+              d = plistlib.load(f)
+          assert d['CFBundleIdentifier'] == 'org.nextbsd.kext.intelwifi', d['CFBundleIdentifier']
+          p = d['IOKitPersonalities']['IntelWiFi']
+          assert p['IOProviderClass'] == 'IOPCIDevice', p['IOProviderClass']
+          assert p['IOClass'] == 'IntelWiFi', p['IOClass']
+          ids = p['IOPCIPrimaryMatch'].split()
+          assert all(x.startswith('0x') and x.endswith('8086') and len(x) == 10 for x in ids), ids[:3]
+          assert '0x24f38086' in ids, "Intel 8260 (0x24f3) missing from match table"
+          print(f"Info.plist valid: {len(ids)} Intel device ids; 8260 (0x24f38086) present")
+          PY
 
       - name: Download nextbsd continuous image
         env:
@@ -296,8 +353,10 @@ jobs:
                 https://gitlab.com/kernel-firmware/linux-firmware.git lf
             ( cd lf && git sparse-checkout set --no-cone intel/iwlwifi LICENCE.iwlwifi_firmware )
             cp -L lf/LICENCE.iwlwifi_firmware lf/intel/iwlwifi/
-            tools/ko2kext.sh -f lf/intel/iwlwifi "$IWKO" IntelWiFi org.nextbsd.kext.intelwifi
-            echo "==> IntelWiFi.kext: $(find IntelWiFi.kext/Contents/Resources/firmware -type f | wc -l) firmware files, $(du -sh IntelWiFi.kext | cut -f1)"
+            PERS=artifacts/intelwifi-personalities/IntelWiFi.iokitpersonalities
+            test -f "$PERS" || { echo "personalities fragment missing: $PERS" >&2; exit 1; }
+            tools/ko2kext.sh -f lf/intel/iwlwifi -p "$PERS" "$IWKO" IntelWiFi org.nextbsd.kext.intelwifi
+            echo "==> IntelWiFi.kext: $(find IntelWiFi.kext/Contents/Resources/firmware -type f | wc -l) firmware files, $(du -sh IntelWiFi.kext | cut -f1), IOKitPersonalities injected"
             tar -czf out/intelwifi-kext.tar.gz IntelWiFi.kext
             ls -lh out/intelwifi-kext.tar.gz
           fi
