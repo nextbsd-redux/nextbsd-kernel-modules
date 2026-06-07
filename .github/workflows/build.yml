@@ -11,6 +11,7 @@ on:
       - '.github/workflows/build.yml'
       - 'tools/ko2kext.sh'
       - 'tools/gen-iwlwifi-personalities.sh'
+      - 'tools/gen-em-personalities.sh'
       - 'tests/kext-boot-test.sh'
   workflow_dispatch:
     inputs:
@@ -132,6 +133,30 @@ jobs:
           name: intelwifi-personalities
           path: personalities/IntelWiFi.iokitpersonalities
 
+      # #219 (D1): generate the IntelEthernet IOKitPersonalities from the e1000
+      # driver's PVID tables (em + igb) in /usr/src — same approach as IntelWiFi,
+      # but the e1000 device ids are symbolic (E1000_DEV_ID_*) and resolved from
+      # e1000_hw.h. amd64 only (arch-independent); uploaded for the kext + publish
+      # jobs.
+      - name: Generate IntelEthernet IOKitPersonalities (#219)
+        if: matrix.target == 'amd64'
+        run: |
+          chmod +x nbkm-tools/tools/gen-em-personalities.sh
+          E1000=/usr/src/sys/dev/e1000
+          test -f "$E1000/if_em.c" || { echo "e1000 driver not found at $E1000" >&2; exit 1; }
+          mkdir -p personalities
+          nbkm-tools/tools/gen-em-personalities.sh "$E1000" \
+              org.nextbsd.kext.intelethernet IntelEthernet > personalities/IntelEthernet.iokitpersonalities
+          echo "=== generated ==="
+          cat personalities/IntelEthernet.iokitpersonalities
+
+      - name: Upload IntelEthernet personalities artifact
+        if: matrix.target == 'amd64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: intelethernet-personalities
+          path: personalities/IntelEthernet.iokitpersonalities
+
       - name: Upload modules artifact
         uses: actions/upload-artifact@v4
         with:
@@ -191,6 +216,12 @@ jobs:
           name: intelwifi-personalities
           path: personalities
 
+      - name: Download IntelEthernet personalities
+        uses: actions/download-artifact@v4
+        with:
+          name: intelethernet-personalities
+          path: personalities
+
       - name: Convert nmdm.ko -> Nmdm.kext and if_iwlwifi.ko -> IntelWiFi.kext
         run: |
           chmod +x tools/ko2kext.sh
@@ -236,6 +267,36 @@ jobs:
           assert all(x.startswith('0x') and x.endswith('8086') and len(x) == 10 for x in ids), ids[:3]
           assert '0x24f38086' in ids, "Intel 8260 (0x24f3) missing from match table"
           print(f"Info.plist valid: {len(ids)} Intel device ids; 8260 (0x24f38086) present")
+          PY
+
+      # #219 (D1): build IntelEthernet.kext from if_em.ko and validate its
+      # Info.plist + IOKitPersonalities. NOT boot-loaded here: the nextbsd
+      # `continuous` image still has `device em` built into its kernel, so
+      # kextload'ing if_em.ko would collide with the in-kernel driver. The live
+      # auto-load + bind proof comes in the kernel PR that flips `nodevice em`
+      # (by which point the e1000 hits device_nomatch and kextd loads this kext).
+      # Stage 1 here proves the bundle is well-formed and ships correct ids.
+      - name: Convert if_em.ko -> IntelEthernet.kext + validate
+        run: |
+          EMKO=$(find modules-dl -type f -name if_em.ko | head -1)
+          test -n "$EMKO" || { echo "if_em.ko not found in modules artifact" >&2; find modules-dl -name 'if_*.ko' | head; exit 1; }
+          PERS=personalities/IntelEthernet.iokitpersonalities
+          test -f "$PERS" || { echo "personalities fragment missing: $PERS" >&2; exit 1; }
+          echo "==> wrapping $EMKO (no firmware — em is a pure driver)"
+          tools/ko2kext.sh -p "$PERS" "$EMKO" IntelEthernet org.nextbsd.kext.intelethernet
+          ls -lR IntelEthernet.kext
+          python3 - <<'PY'
+          import plistlib
+          with open('IntelEthernet.kext/Contents/Info.plist','rb') as f:
+              d = plistlib.load(f)
+          assert d['CFBundleIdentifier'] == 'org.nextbsd.kext.intelethernet', d['CFBundleIdentifier']
+          p = d['IOKitPersonalities']['IntelEthernet']
+          assert p['IOProviderClass'] == 'IOPCIDevice', p['IOProviderClass']
+          assert p['IOClass'] == 'IntelEthernet', p['IOClass']
+          ids = p['IOPCIPrimaryMatch'].split()
+          assert all(x.startswith('0x') and x.endswith('8086') and len(x) == 10 for x in ids), ids[:3]
+          assert '0x100e8086' in ids, "qemu 82540EM (0x100e8086) missing from match table"
+          print(f"Info.plist valid: {len(ids)} Intel e1000 device ids; 82540EM (0x100e8086) present")
           PY
 
       - name: Download nextbsd continuous image
@@ -361,6 +422,27 @@ jobs:
             ls -lh out/intelwifi-kext.tar.gz
           fi
 
+      # Build the SHIPPED IntelEthernet.kext (amd64) from if_em.ko and publish it
+      # as intelethernet-kext.tar.gz (#219). No firmware — e1000 is a pure driver.
+      # nextbsd installs it into the ISO's /System/Library/Extensions; once the
+      # kernel drops `device em` (the follow-on kernel PR), the matcher auto-loads
+      # this kext when the e1000 attaches. One kext covers the whole Intel GbE
+      # family (em + igb).
+      - name: Build + bundle IntelEthernet.kext (if_em)
+        run: |
+          chmod +x tools/ko2kext.sh
+          EMKO=$(find artifacts/nextbsd-modules-amd64 -type f -name if_em.ko | head -1)
+          if [ -z "$EMKO" ]; then
+            echo "WARN: if_em.ko not in modules artifact — skipping IntelEthernet.kext"
+          else
+            PERS=artifacts/intelethernet-personalities/IntelEthernet.iokitpersonalities
+            test -f "$PERS" || { echo "personalities fragment missing: $PERS" >&2; exit 1; }
+            tools/ko2kext.sh -p "$PERS" "$EMKO" IntelEthernet org.nextbsd.kext.intelethernet
+            echo "==> IntelEthernet.kext: $(du -sh IntelEthernet.kext | cut -f1), IOKitPersonalities injected"
+            tar -czf out/intelethernet-kext.tar.gz IntelEthernet.kext
+            ls -lh out/intelethernet-kext.tar.gz
+          fi
+
       # Stable asset names → each publish overwrites in place; no stale pileup.
       - name: Publish to continuous release
         uses: softprops/action-gh-release@v2
@@ -370,9 +452,10 @@ jobs:
           body: |
             Rolling module build, refreshed on every successful `main` build.
             Consumed by nextbsd: `nextbsd-modules-<arch>.tar.gz` (the *.ko tree,
-            installed into /boot/kernel) and `intelwifi-kext.tar.gz` (the
-            IntelWiFi.kext bundle with the full iwlwifi firmware set, installed
-            into /System/Library/Extensions).
+            installed into /boot/kernel), `intelwifi-kext.tar.gz` (the
+            IntelWiFi.kext bundle with the full iwlwifi firmware set) and
+            `intelethernet-kext.tar.gz` (the IntelEthernet.kext bundle, if_em /
+            Intel GbE family) — both installed into /System/Library/Extensions.
 
             Build log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
             Commit: ${{ github.sha }}
