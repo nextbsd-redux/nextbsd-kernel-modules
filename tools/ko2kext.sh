@@ -137,6 +137,8 @@ cat > "${KEXT}/Contents/Info.plist" <<EOF
 	<string>${VERSION}</string>
 	<key>CFBundleVersion</key>
 	<string>${VERSION}</string>
+	<key>OSBundleCompatibleVersion</key>
+	<string>${VERSION}</string>
 ${OSBL}${IOKP}	<key>OSBundleRequired</key>
 	<string>Root</string>
 </dict>

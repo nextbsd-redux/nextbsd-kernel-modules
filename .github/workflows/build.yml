@@ -340,6 +340,10 @@ jobs:
           for name,(bid,vendor,deps) in checks.items():
               d=load(name)
               assert d['CFBundleIdentifier']==bid, (name, d['CFBundleIdentifier'])
+              # Every kext must declare OSBundleCompatibleVersion, or it can't be
+              # used as a dependency target — OSKext rejects it ("lacks valid
+              # OSBundleCompatibleVersion"), which blocks every dependent kext.
+              assert d.get('OSBundleCompatibleVersion'), (name,'missing OSBundleCompatibleVersion')
               libs=d.get('OSBundleLibraries',{})
               for dep in deps: assert dep in libs, (name,'missing OSBundleLibraries dep',dep)
               if vendor:
