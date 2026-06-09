@@ -181,6 +181,81 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
 
+  # EXPERIMENTAL (graphics kext series, step 1): prove the drm-kmod graphics
+  # drivers BUILD against our patched kernel obj before we wrap them into kexts.
+  # `6.6-lts` is the drm-kmod branch matching FreeBSD releng/15.0 (the
+  # graphics/drm-66-kmod port line). drm-kmod is out-of-tree (its own
+  # `make SYSDIR=...`, not the kernel's make.py), so we cross-build it inside
+  # FreeBSD's `buildenv` (which sets MACHINE + the cross compiler + exposes the
+  # kernel opt headers from /usr/obj). Compile-only: IOGraphics.kext + the
+  # per-vendor GPU kexts come once these .ko's exist. amd64 first. Independent
+  # job — does NOT gate publish (publish needs: modules), so it can be iterated
+  # freely while we settle the cross-build.
+  drm-kmod:
+    name: drm-kmod build (drm/i915/amdgpu/radeon, amd64)
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:amd64-${{ (github.event.client_payload.fbsd_sha || inputs.fbsd_sha) && format('fbsd-{0}', github.event.client_payload.fbsd_sha || inputs.fbsd_sha) || 'latest' }}
+    steps:
+      - name: Download kernel obj tree from kernel continuous release
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          mkdir -p /usr/obj
+          gh release download continuous \
+            --repo nextbsd-redux/nextbsd-kernel \
+            --pattern "kernel-obj-amd64.tar.gz" \
+            --output /tmp/kernel-obj.tar.gz --clobber
+          tar -C /usr/obj -xzf /tmp/kernel-obj.tar.gz
+
+      - name: Apply patches to source
+        run: |
+          cd /usr/src
+          # Same patches + config the kernel was built with (the baked /usr/src
+          # is unpatched), so drm-kmod compiles against the real NextBSD KBI.
+          git clone --depth 1 https://github.com/nextbsd-redux/nextbsd-kernel.git /tmp/nk
+          for p in $(cat /tmp/nk/patches/series); do
+            echo "Applying $p"
+            git apply /tmp/nk/patches/$p
+          done
+          cp /tmp/nk/config/NEXTBSD /usr/src/sys/amd64/conf/
+
+      - name: Build drm-kmod (6.6-lts) against the kernel obj
+        run: |
+          git clone --depth 1 --branch 6.6-lts \
+            https://github.com/freebsd/drm-kmod.git /tmp/drm-kmod
+          NPROC=$(nproc)
+          cd /usr/src
+          ./tools/build/make.py \
+            --cross-bindir="${CCACHE_CROSS_BINDIR}" \
+            TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
+            buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod -j${NPROC} SYSDIR=/usr/src/sys"
+
+      - name: Collect + list drm-kmod .ko output
+        run: |
+          # Objs may land in-tree or under MAKEOBJDIRPREFIX, so search both.
+          mkdir -p /tmp/ko-out
+          find /tmp/drm-kmod "${MAKEOBJDIRPREFIX:-/usr/obj}" -name '*.ko' 2>/dev/null \
+            -exec cp -v {} /tmp/ko-out/ \; || true
+          echo "=== collected .ko files ==="
+          ls -lh /tmp/ko-out || true
+          echo "=== drivers we need for the graphics kexts ==="
+          for ko in drm i915kms amdgpu radeonkms ttm; do
+            if [ -f "/tmp/ko-out/${ko}.ko" ]; then echo "  OK   ${ko}.ko"; else echo "  MISS ${ko}.ko"; fi
+          done
+          # drm.ko + the three drivers are the must-haves; ttm may be folded into drm.
+          for ko in drm i915kms amdgpu radeonkms; do
+            test -f "/tmp/ko-out/${ko}.ko" || { echo "FAIL: required ${ko}.ko not built" >&2; exit 1; }
+          done
+          echo "drm-kmod built drm + i915kms + amdgpu + radeonkms"
+
+      - name: Upload drm-kmod modules artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: drm-kmod-modules-amd64
+          path: /tmp/ko-out/*.ko
+          if-no-files-found: warn
+
   # Prove the graphics-kext IOKitPersonalities generators (i915/amdgpu/radeon) on
   # every PR. The drm-kmod source build isn't wired yet, so this exercises the
   # parsers against synthetic PCI-id fixtures (same shapes as i915_pciids.h /
