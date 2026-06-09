@@ -12,7 +12,11 @@ on:
       - 'tools/ko2kext.sh'
       - 'tools/gen-iwlwifi-personalities.sh'
       - 'tools/gen-em-personalities.sh'
+      - 'tools/gen-i915-personalities.sh'
+      - 'tools/gen-amdgpu-personalities.sh'
+      - 'tools/gen-radeon-personalities.sh'
       - 'tests/kext-boot-test.sh'
+      - 'tests/personalities-selftest.sh'
   workflow_dispatch:
     inputs:
       fbsd_sha:
@@ -176,6 +180,23 @@ jobs:
             --notes "Built against FreeBSD ${FREEBSD_BRANCH}"
         env:
           GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+
+  # Prove the graphics-kext IOKitPersonalities generators (i915/amdgpu/radeon) on
+  # every PR. The drm-kmod source build isn't wired yet, so this exercises the
+  # parsers against synthetic PCI-id fixtures (same shapes as i915_pciids.h /
+  # amdgpu_drv.c / drm_pciids.h) and asserts the emitted match table — including
+  # that radeon EXCLUDES r128 (also vendor 0x1002). Lightweight (no module build
+  # needed); the equivalent of how gen-em/gen-iwlwifi are proven by the module +
+  # kext-smoke jobs. PR-only; publish stays gated to main.
+  graphics-personalities-selftest:
+    name: graphics personalities self-test (i915/amdgpu/radeon)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout (tools/ + tests/)
+        uses: actions/checkout@v4
+      - name: Run i915/amdgpu/radeon personality generators against fixtures
+        run: ./tests/personalities-selftest.sh
 
   # PR-only kext proof-of-concept (#183): convert a leaf .ko to a .kext and
   # prove it loads via the Apple-shaped kextload in a booted VM. Wraps nmdm.ko
