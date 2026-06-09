@@ -256,6 +256,116 @@ jobs:
           path: /tmp/ko-out/*.ko
           if-no-files-found: warn
 
+      # --- Wrap the built .ko's into kexts (graphics step 2) ---------------------
+      # Now that drm-kmod compiles clean against our kernel, prove the full kext
+      # bundle structure: generate each driver's device-id personalities from the
+      # REAL drm-kmod source (not fixtures), wrap drm/ttm/dmabuf + the three GPU
+      # drivers into kexts with the right OSBundleLibraries dependency chain, and
+      # validate every Info.plist. Firmware (per-vendor, ko2kext -f) + the on-real-
+      # HW load test come next; this proves the bundles + matching + de-overlap are
+      # correct end to end.
+      - name: Checkout tools (ko2kext + personality generators)
+        uses: actions/checkout@v4
+        with:
+          path: nbkm-tools
+
+      - name: Generate graphics IOKitPersonalities from drm-kmod source
+        run: |
+          set -eu
+          T=nbkm-tools/tools
+          chmod +x "$T"/gen-i915-personalities.sh "$T"/gen-amdgpu-personalities.sh "$T"/gen-radeon-personalities.sh
+          mkdir -p pers
+          # Locate the id tables in the drm-kmod checkout (paths can drift across
+          # drm versions, so find them rather than hardcode).
+          I915H=$(find /tmp/drm-kmod -name i915_pciids.h | head -1)
+          AMDC=$(find /tmp/drm-kmod -path '*amd/amdgpu/amdgpu_drv.c' | head -1)
+          DRMP=$(find /tmp/drm-kmod -name drm_pciids.h | head -1)
+          test -f "$I915H" || { echo "i915_pciids.h not found in drm-kmod" >&2; exit 1; }
+          test -f "$AMDC"  || { echo "amdgpu_drv.c not found in drm-kmod" >&2; exit 1; }
+          test -f "$DRMP"  || { echo "drm_pciids.h not found in drm-kmod" >&2; exit 1; }
+          "$T/gen-i915-personalities.sh"   "$I915H" org.nextbsd.kext.intelgraphics IntelGraphics  > pers/IntelGraphics.iokitpersonalities
+          "$T/gen-amdgpu-personalities.sh" "$AMDC"  org.nextbsd.kext.amdgraphics   AMDGraphics    > pers/AMDGraphics.iokitpersonalities
+          # De-overlap: radeon yields SI/CIK to amdgpu (this build compiles amdgpu
+          # WITH CONFIG_DRM_AMDGPU_SI/_CIK), so feed amdgpu's match words to -x.
+          grep -oE '0x[0-9a-f]{8}' pers/AMDGraphics.iokitpersonalities | sort -u > pers/amdgpu-match.txt
+          "$T/gen-radeon-personalities.sh" -x pers/amdgpu-match.txt "$DRMP" org.nextbsd.kext.radeongraphics RadeonGraphics > pers/RadeonGraphics.iokitpersonalities
+          echo "=== device-id counts ==="
+          for f in pers/IntelGraphics AMDGraphics RadeonGraphics; do : ; done
+          for f in pers/*.iokitpersonalities; do
+            n=$(grep -oE '0x[0-9a-f]{8}' "$f" | sort -u | wc -l | tr -d ' ')
+            echo "  $(basename "$f"): ${n} ids"
+          done
+
+      - name: Wrap drm core + GPU drivers into kexts
+        run: |
+          set -eu
+          K=nbkm-tools/tools/ko2kext.sh
+          chmod +x "$K"
+          O=kexts; mkdir -p "$O"
+          KO=/tmp/ko-out
+          # drm core family. Load order dmabuf -> drm -> ttm; linuxkpi is baked in
+          # the kernel (like the iwlwifi kext), so it needs no OSBundleLibraries.
+          "$K" -o "$O" "$KO/dmabuf.ko" DMABuf org.nextbsd.kext.dmabuf
+          "$K" -o "$O" -l org.nextbsd.kext.dmabuf "$KO/drm.ko" IOGraphics org.nextbsd.kext.iographics
+          "$K" -o "$O" -l org.nextbsd.kext.iographics "$KO/ttm.ko" TTM org.nextbsd.kext.ttm
+          # Per-vendor GPU kexts: depend on the drm core, carry their own device-id
+          # match table. (Firmware bundling — ko2kext -f — is the next step.)
+          "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.ttm \
+               -p pers/IntelGraphics.iokitpersonalities \
+               "$KO/i915kms.ko" IntelGraphics org.nextbsd.kext.intelgraphics
+          "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.ttm -l org.nextbsd.kext.dmabuf \
+               -p pers/AMDGraphics.iokitpersonalities \
+               "$KO/amdgpu.ko" AMDGraphics org.nextbsd.kext.amdgraphics
+          "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.ttm \
+               -p pers/RadeonGraphics.iokitpersonalities \
+               "$KO/radeonkms.ko" RadeonGraphics org.nextbsd.kext.radeongraphics
+          echo "=== built kexts ==="
+          for d in "$O"/*.kext; do echo "  $(basename "$d") ($(du -sh "$d" | cut -f1))"; done
+
+      - name: Validate graphics kext Info.plists + dependency chain
+        run: |
+          python3 - <<'PY'
+          import plistlib
+          # name -> (bundle-id, vendor-or-None, required OSBundleLibraries)
+          checks = {
+            'DMABuf':         ('org.nextbsd.kext.dmabuf', None, []),
+            'IOGraphics':     ('org.nextbsd.kext.iographics', None, ['org.nextbsd.kext.dmabuf']),
+            'TTM':            ('org.nextbsd.kext.ttm', None, ['org.nextbsd.kext.iographics']),
+            'IntelGraphics':  ('org.nextbsd.kext.intelgraphics', '8086', ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm']),
+            'AMDGraphics':    ('org.nextbsd.kext.amdgraphics', '1002', ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm','org.nextbsd.kext.dmabuf']),
+            'RadeonGraphics': ('org.nextbsd.kext.radeongraphics', '1002', ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm']),
+          }
+          def load(n):
+              return plistlib.load(open(f'kexts/{n}.kext/Contents/Info.plist','rb'))
+          for name,(bid,vendor,deps) in checks.items():
+              d=load(name)
+              assert d['CFBundleIdentifier']==bid, (name, d['CFBundleIdentifier'])
+              libs=d.get('OSBundleLibraries',{})
+              for dep in deps: assert dep in libs, (name,'missing OSBundleLibraries dep',dep)
+              if vendor:
+                  per=d['IOKitPersonalities'][name]
+                  assert per['IOProviderClass']=='IOPCIDevice', (name,per)
+                  assert per['IOClass']==name, (name,per)
+                  ids=per['IOPCIPrimaryMatch'].split()
+                  assert ids and all(x.startswith('0x') and x.endswith(vendor) and len(x)==10 for x in ids), (name, ids[:3])
+                  print(f"{name}: OK — {len(ids)} {vendor} ids, deps {deps}")
+              else:
+                  print(f"{name}: OK — drm-core, deps {deps}")
+          # The matched GPU kexts must have DISJOINT device-id sets.
+          def ids(n):
+              return set(load(n)['IOKitPersonalities'][n]['IOPCIPrimaryMatch'].split())
+          for a,b in [('AMDGraphics','RadeonGraphics'),('AMDGraphics','IntelGraphics'),('RadeonGraphics','IntelGraphics')]:
+              o=ids(a)&ids(b)
+              assert not o, f"{a}/{b} share device ids: {sorted(o)[:5]}"
+          print("All GPU kext match sets pairwise disjoint")
+          PY
+
+      - name: Upload graphics kexts artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: graphics-kexts-amd64
+          path: kexts/**
+
   # Prove the graphics-kext IOKitPersonalities generators (i915/amdgpu/radeon) on
   # every PR. The drm-kmod source build isn't wired yet, so this exercises the
   # parsers against synthetic PCI-id fixtures (same shapes as i915_pciids.h /
