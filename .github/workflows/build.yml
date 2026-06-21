@@ -30,8 +30,6 @@ env:
 jobs:
   modules:
     runs-on: ubuntu-24.04
-    env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
     strategy:
       fail-fast: false
       matrix:
@@ -61,22 +59,6 @@ jobs:
             --output /tmp/kernel-obj.tar.gz --clobber
           tar -C /usr/obj -xzf /tmp/kernel-obj.tar.gz
 
-      # ccache: modules is mostly compilation, so this is the biggest win.
-      # ccache is in the toolchain image; --cross-bindir points at its wrapper.
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/.ccache
-          key: ccache-modules-${{ matrix.target }}-${{ github.run_id }}
-          restore-keys: |
-            ccache-modules-${{ matrix.target }}-
-
-      - name: ccache reset counters
-        run: |
-          ccache -o max_size=5G
-          ccache -z
-          ccache -s
-
       - name: Apply patches to source
         run: |
           cd /usr/src
@@ -92,19 +74,16 @@ jobs:
       - name: Build modules
         run: |
           cd /usr/src
-          # --cross-bindir = ccache wrapper (cached compiles). MAKEOBJDIRPREFIX +
-          # CCACHE_CROSS_BINDIR inherited from the toolchain image.
+          # --cross-bindir points at the external Clang 19 cross toolchain
+          # (CROSS_BINDIR), inherited from the toolchain image ENV.
           # NO_KERNEL=yes builds modules against the already-built kernel obj.
           ./tools/build/make.py \
-            --cross-bindir="${CCACHE_CROSS_BINDIR}" \
+            --cross-bindir="${CROSS_BINDIR}" \
             TARGET="${{ matrix.target }}" \
             TARGET_ARCH="${{ matrix.target_arch }}" \
             KERNCONF=NEXTBSD \
             NO_KERNEL=yes \
             buildkernel -j"$(nproc)"
-
-      - name: ccache stats (after build — hit rate is the proof)
-        run: ccache -s
 
       # P1 (#213): generate the IntelWiFi IOKitPersonalities (device-id match
       # table) from the iwlwifi driver source in /usr/src — the data the
@@ -227,7 +206,7 @@ jobs:
           NPROC=$(nproc)
           cd /usr/src
           ./tools/build/make.py \
-            --cross-bindir="${CCACHE_CROSS_BINDIR}" \
+            --cross-bindir="${CROSS_BINDIR}" \
             TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
             buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod -j${NPROC} SYSDIR=/usr/src/sys"
 
