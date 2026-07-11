@@ -26,17 +26,48 @@ chmod +x "$TOOLS"/gen-i915-personalities.sh \
          "$TOOLS"/gen-radeon-personalities.sh \
          "$TOOLS"/gen-nvidia-personalities.sh
 
-# --- i915: INTEL_VGA_DEVICE macro rows; 0x591E is uppercase to prove
-#     case-normalisation ---
+# --- i915: 6.12-shape (#337). IDs live in INTEL_<PLAT>_IDS(MACRO__, info) macros,
+#     not flat INTEL_VGA_DEVICE(0x..) literals, and the driver's pciidlist[] in
+#     i915_pci.c is the authoritative set. The generator preprocessor-expands it.
+#     This fixture proves: (a) case-normalisation (0x591E), (b) transitive nesting
+#     (ARL pulled in via MTL), (c) exclusion of a header macro the pciidlist does
+#     NOT reference (the xe-only over-claim trap). Needs cc (ubuntu runners have it). ---
 cat > "$WORK/i915_pciids.h" <<'EOF'
-#define INTEL_KBL_GT2_IDS(info) \
-	INTEL_VGA_DEVICE(0x5916, info), \
-	INTEL_VGA_DEVICE(0x591E, info)
+#define INTEL_FOO_IDS(MACRO__, info) \
+	MACRO__(0x5916, info), \
+	MACRO__(0x591E, info)
+#define INTEL_ARL_SUB_IDS(MACRO__, info) \
+	MACRO__(0x7D41, info)
+#define INTEL_MTL_IDS(MACRO__, info) \
+	MACRO__(0x7D60, info), \
+	INTEL_ARL_SUB_IDS(MACRO__, info)
+/* xe-only platform: defined here but NOT referenced by the pciidlist below */
+#define INTEL_XE_ONLY_IDS(MACRO__, info) \
+	MACRO__(0x6420, info)
 EOF
-I915=$("$TOOLS/gen-i915-personalities.sh" "$WORK/i915_pciids.h" org.nextbsd.kext.intelgraphics IntelGraphics)
-printf '%s\n' "$I915"
-printf '%s\n' "$I915" | grep -q '0x59168086' || fail "i915: 0x5916 missing"
-printf '%s\n' "$I915" | grep -q '0x591e8086' || fail "i915: 0x591E not lowercased"
+cat > "$WORK/i915_pci.c" <<'EOF'
+static const struct pci_device_id pciidlist[] = {
+	INTEL_FOO_IDS(INTEL_VGA_DEVICE, &foo_info),
+	INTEL_MTL_IDS(INTEL_VGA_DEVICE, &mtl_info),
+	/* INTEL_XE_ONLY_IDS intentionally not referenced (xe-only) */
+	INTEL_VGA_DEVICE(0, 0)
+};
+EOF
+if command -v cc >/dev/null 2>&1 || command -v "${CC:-}" >/dev/null 2>&1; then
+	I915=$("$TOOLS/gen-i915-personalities.sh" "$WORK/i915_pciids.h" "$WORK/i915_pci.c" org.nextbsd.kext.intelgraphics IntelGraphics)
+	printf '%s\n' "$I915"
+	printf '%s\n' "$I915" | grep -q '0x59168086' || fail "i915: 0x5916 (FOO) missing"
+	printf '%s\n' "$I915" | grep -q '0x591e8086' || fail "i915: 0x591E not lowercased"
+	printf '%s\n' "$I915" | grep -q '0x7d608086' || fail "i915: 0x7D60 (MTL direct) missing"
+	printf '%s\n' "$I915" | grep -q '0x7d418086' || fail "i915: 0x7D41 (ARL nested via MTL) missing — transitive expansion broken"
+	if printf '%s\n' "$I915" | grep -q '0x64208086'; then
+		fail "i915: 0x6420 (xe-only, not in pciidlist) wrongly included — over-claim"
+	fi
+	echo "i915: 6.12 pciidlist expansion OK (nesting resolved, xe-only excluded)"
+else
+	echo "i915: SKIP (no C preprocessor available; generator needs cc)"
+	I915=""
+fi
 
 # --- amdgpu: {0x1002, 0x....} pci_device_id rows. 0x6649 is a CIK id (Bonaire)
 #     that ALSO appears in the radeon fixture below — the de-overlap case. ---
@@ -90,6 +121,7 @@ if command -v python3 >/dev/null 2>&1; then
 	for pair in "IntelGraphics:$I915" "AMDGraphics:$AMD" "RadeonGraphics:$RAD"; do
 		cls=${pair%%:*}
 		frag=${pair#*:}
+		[ -n "$frag" ] || continue   # i915 skipped when no cc — nothing to check
 		{
 			printf '%s' '<?xml version="1.0" encoding="UTF-8"?>'
 			printf '%s' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
