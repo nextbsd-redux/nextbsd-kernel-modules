@@ -177,8 +177,12 @@ expect {
     eof       { puts "\nOK: VM exited" }
 }
 
-close
-wait
+# Teardown must not fail the run after all functional stages passed. If `halt -p`
+# already powered the VM off (the eof branch above), the spawn is closed and a
+# bare `close`/`wait` throws "spawn id ... not open" — a runner-timing artifact,
+# not a test failure. Guard both so an already-exited VM is harmless.
+catch { close }
+catch { wait }
 exit 0
 EOF
 

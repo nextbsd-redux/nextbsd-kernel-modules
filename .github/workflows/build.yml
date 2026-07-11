@@ -15,6 +15,7 @@ on:
       - 'tools/gen-i915-personalities.sh'
       - 'tools/gen-amdgpu-personalities.sh'
       - 'tools/gen-radeon-personalities.sh'
+      - 'tools/gen-nvidia-personalities.sh'
       - 'tests/kext-boot-test.sh'
       - 'tests/personalities-selftest.sh'
   workflow_dispatch:
