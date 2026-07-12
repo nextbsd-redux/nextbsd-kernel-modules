@@ -847,3 +847,71 @@ jobs:
           name: nvidia-modules-amd64
           path: /tmp/nv-ko/*.ko
           if-no-files-found: warn
+
+      # Wrap the three .ko's into the chained NVIDIAGraphics595 kext (#385): one
+      # kext per .ko, OSBundleLibraries-chained like IntelGraphics->IOGraphics.
+      # NVIDIAGraphics595 (nvidia-drm, the load target) -> NVIDIAModeset595 ->
+      # NVIDIACore595, and -> IOGraphics (drmn). Carries the Turing+ personalities
+      # (from the driver's own supported-gpus.json) + the GSP firmware blobs.
+      - name: Wrap the chained NVIDIAGraphics595 kexts
+        run: |
+          set -eu
+          WRKSRC="/tmp/nvw/NVIDIA-FreeBSD-x86_64-${NVIDIA_DISTVERSION}"
+          T=nbkm-tools/tools
+          chmod +x "$T"/ko2kext.sh "$T"/gen-nvidia-personalities.sh
+          O=nvidia-kexts; mkdir -p "$O" pers
+          # Turing+ match table = the current unified driver's chips (no legacybranch;
+          # 595 dropped Maxwell/Pascal/Volta to the 580 branch).
+          "$T/gen-nvidia-personalities.sh" \
+            "$WRKSRC/doc/supported-gpus/supported-gpus.json" \
+            org.nextbsd.driver.nvidiagraphics595 NVIDIAGraphics595 \
+            > pers/NVIDIAGraphics595.iokitpersonalities
+          # core (leaf) <- modeset <- drm. NVIDIA omits TTM/DMABuf (own memmgr); the
+          # drm bridge links the shared drmn core (IOGraphics) + carries personalities
+          # + GSP firmware (gsp_tu10x/ga10x.bin) in Contents/Resources/firmware/.
+          "$T/ko2kext.sh" -o "$O" /tmp/nv-ko/nvidia.ko NVIDIACore595 org.nextbsd.driver.nvidiacore595
+          "$T/ko2kext.sh" -o "$O" -l org.nextbsd.driver.nvidiacore595 \
+            /tmp/nv-ko/nvidia-modeset.ko NVIDIAModeset595 org.nextbsd.driver.nvidiamodeset595
+          "$T/ko2kext.sh" -o "$O" \
+            -l org.nextbsd.driver.nvidiamodeset595 -l org.nextbsd.kext.iographics \
+            -p pers/NVIDIAGraphics595.iokitpersonalities \
+            -f "$WRKSRC/firmware/gsp_tu10x/gsp_tu10x.bin" \
+            -f "$WRKSRC/firmware/gsp_ga10x/gsp_ga10x.bin" \
+            /tmp/nv-ko/nvidia-drm.ko NVIDIAGraphics595 org.nextbsd.driver.nvidiagraphics595
+          echo "=== wrapped kexts ==="
+          for d in "$O"/*.kext; do echo "  $(basename "$d") ($(du -sh "$d"|cut -f1))"; done
+
+      - name: Validate the NVIDIA kext bundles
+        run: |
+          python3 - nvidia-kexts <<'PY'
+          import plistlib, sys, os
+          O = sys.argv[1]
+          def info(n): return plistlib.load(open(f"{O}/{n}.kext/Contents/Info.plist","rb"))
+          chain = {
+            'NVIDIACore595':     ('org.nextbsd.driver.nvidiacore595', []),
+            'NVIDIAModeset595':  ('org.nextbsd.driver.nvidiamodeset595', ['org.nextbsd.driver.nvidiacore595']),
+            'NVIDIAGraphics595': ('org.nextbsd.driver.nvidiagraphics595',
+                                  ['org.nextbsd.driver.nvidiamodeset595','org.nextbsd.kext.iographics']),
+          }
+          for name,(bid,deps) in chain.items():
+              d = info(name)
+              assert d['CFBundleIdentifier'] == bid, (name, d['CFBundleIdentifier'])
+              libs = d.get('OSBundleLibraries', {})
+              for dep in deps: assert dep in libs, (name, 'missing OSBundleLibraries dep', dep)
+              print(f"{name}: id ok, deps {sorted(libs)}")
+          g = info('NVIDIAGraphics595')
+          p = g['IOKitPersonalities']['NVIDIAGraphics595']
+          ids = p['IOPCIPrimaryMatch'].split()
+          assert ids and all(x.startswith('0x') and x.endswith('10de') and len(x)==10 for x in ids), ids[:3]
+          fw = sorted(os.listdir(f"{O}/NVIDIAGraphics595.kext/Contents/Resources/firmware"))
+          assert fw == ['gsp_ga10x.bin','gsp_tu10x.bin'], fw
+          print(f"NVIDIAGraphics595: {len(ids)} Turing+ ids (0x10de), firmware {fw}")
+          print("NVIDIA kext bundles OK (chain + personalities + firmware)")
+          PY
+
+      - name: Upload NVIDIA kexts artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvidia-kexts-amd64
+          path: nvidia-kexts
+          if-no-files-found: warn
