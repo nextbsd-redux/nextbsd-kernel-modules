@@ -16,6 +16,7 @@ on:
       - 'tools/gen-amdgpu-personalities.sh'
       - 'tools/gen-radeon-personalities.sh'
       - 'tools/gen-nvidia-personalities.sh'
+      - 'tools/nvidia-portpatch.sh'
       - 'tests/kext-boot-test.sh'
       - 'tests/personalities-selftest.sh'
   workflow_dispatch:
@@ -711,3 +712,105 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             out/*.tar.gz
+
+  # EXPERIMENTAL (NVIDIA kext series, step 2 / nextbsd#384): prove NVIDIA's
+  # closed-source kmods BUILD against our patched 15.1 kernel obj before wrapping
+  # them into a NVIDIAGraphics kext. Mirrors the drm-kmod job (same container,
+  # kernel-obj download, nextbsd-kernel patch re-apply, `make.py ... buildenv`).
+  # Source is a tarball fetch (not a git clone); we replicate FreeBSD's
+  # x11/nvidia-kmod port fetch+patch by hand: SUB_PATCHES (the .in unified diffs,
+  # %%NVSRC%%->nvidia, patch -p0) then the post-patch REINPLACE edits via
+  # tools/nvidia-portpatch.sh (transcribed 1:1, locally verified vs the real
+  # 595.84 source). Driver 595.84 is amd64-only (prebuilt x86_64 nv-kernel blob).
+  # First milestone: nvidia.ko + nvidia-modeset.ko compile (src/Makefile builds
+  # only those two; nvidia-drm is a follow-on needing DRMKMODDIR). PR-gated,
+  # compile-only, gates nothing (publish untouched) so it can be iterated freely.
+  nvidia-build:
+    name: nvidia-kmod build (nvidia + nvidia-modeset, amd64)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:amd64-${{ (github.event.client_payload.fbsd_sha || inputs.fbsd_sha) && format('fbsd-{0}', github.event.client_payload.fbsd_sha || inputs.fbsd_sha) || 'latest' }}
+    env:
+      NVIDIA_DISTVERSION: "595.84"
+      PORTS_FILES: "https://raw.githubusercontent.com/freebsd/freebsd-ports/main/x11/nvidia-driver/files"
+    steps:
+      - name: Download kernel obj tree from kernel continuous release
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          mkdir -p /usr/obj
+          gh release download continuous \
+            --repo nextbsd-redux/nextbsd-kernel \
+            --pattern "kernel-obj-amd64.tar.gz" \
+            --output /tmp/kernel-obj.tar.gz --clobber
+          tar -C /usr/obj -xzf /tmp/kernel-obj.tar.gz
+
+      - name: Apply patches to source
+        run: |
+          cd /usr/src
+          git clone --depth 1 https://github.com/nextbsd-redux/nextbsd-kernel.git /tmp/nk
+          for p in $(cat /tmp/nk/patches/series); do
+            echo "Applying $p"
+            git apply /tmp/nk/patches/$p
+          done
+          cp /tmp/nk/config/NEXTBSD /usr/src/sys/amd64/conf/
+
+      - name: Checkout tools (nvidia-portpatch)
+        uses: actions/checkout@v4
+        with:
+          path: nbkm-tools
+
+      - name: Fetch + patch NVIDIA source (SUB_PATCHES + port REINPLACE edits)
+        run: |
+          set -eu
+          V="${NVIDIA_DISTVERSION}"
+          WRKSRC="/tmp/nvw/NVIDIA-FreeBSD-x86_64-${V}"
+          mkdir -p /tmp/nvw
+          curl -fLo /tmp/nvidia.tar.xz \
+            "https://download.nvidia.com/XFree86/FreeBSD-x86_64/${V}/NVIDIA-FreeBSD-x86_64-${V}.tar.xz"
+          tar -C /tmp/nvw -xJf /tmp/nvidia.tar.xz
+          # SUB_PATCHES that pass the NVVERSION guards at 595.084 (Makefile,
+          # nv-freebsd.h, Makefile-2 >=580, gsp firmware-registry >=565). Only
+          # token is %%NVSRC%% -> nvidia; unified diffs are src/-prefixed => -p0.
+          for p in extra-patch-src-Makefile extra-patch-src-nv-freebsd.h \
+                   extra-patch-src-Makefile-2 \
+                   extra-gsp-patch-src-common-inc-nv_firmware_registry.h ; do
+            curl -fsSL "${PORTS_FILES}/${p}.in" | sed 's/%%NVSRC%%/nvidia/g' > "/tmp/${p}"
+            echo "applying SUB_PATCH ${p}"
+            patch --forward -E -p0 -d "${WRKSRC}" < "/tmp/${p}"
+          done
+          # post-patch REINPLACE edits (transcribed from x11/nvidia-kmod/Makefile)
+          chmod +x nbkm-tools/tools/nvidia-portpatch.sh
+          nbkm-tools/tools/nvidia-portpatch.sh "${WRKSRC}" nvidia
+
+      - name: Build nvidia.ko + nvidia-modeset.ko against the kernel obj
+        run: |
+          NPROC=$(nproc)
+          WRKSRC="/tmp/nvw/NVIDIA-FreeBSD-x86_64-${NVIDIA_DISTVERSION}"
+          cd /usr/src
+          ./tools/build/make.py \
+            --cross-bindir="${CROSS_BINDIR}" \
+            TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
+            buildenv BUILDENV_SHELL="make -C ${WRKSRC} -j${NPROC} SYSDIR=/usr/src/sys"
+
+      - name: Collect + gate the NVIDIA .ko output
+        run: |
+          WRKSRC="/tmp/nvw/NVIDIA-FreeBSD-x86_64-${NVIDIA_DISTVERSION}"
+          mkdir -p /tmp/nv-ko
+          find "${WRKSRC}" "${MAKEOBJDIRPREFIX:-/usr/obj}" -name '*.ko' 2>/dev/null \
+            -exec cp -v {} /tmp/nv-ko/ \; || true
+          echo "=== collected .ko files ==="
+          ls -lh /tmp/nv-ko || true
+          for ko in nvidia nvidia-modeset; do
+            test -f "/tmp/nv-ko/${ko}.ko" || { echo "FAIL: required ${ko}.ko not built" >&2; exit 1; }
+            echo "  OK ${ko}.ko"
+          done
+          echo "nvidia-build: nvidia.ko + nvidia-modeset.ko compiled against the 15.1 kernel obj"
+
+      - name: Upload NVIDIA modules artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvidia-modules-amd64
+          path: /tmp/nv-ko/*.ko
+          if-no-files-found: warn
