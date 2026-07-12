@@ -87,6 +87,16 @@ ed "modeset printf attr 2" opt "$MSET/nvidia-modeset-os-interface.h" -e 's/va_li
 ed "nvlink_freebsd.c K&R void" opt "$S/nvlink_freebsd.c" -e '/nvlink_allocLock/s,(),(void),'
 # default option ACPI_PM on -> define NV_SUPPORT_ACPI_PM
 ed "nv-freebsd.h enable ACPI_PM" opt "$NVF" -E -e 's/undef (NV_SUPPORT_ACPI_PM)/define \1/'
+# LINUX option OFF for NextBSD (port's !MLINUX edit). NextBSD ships no Linuxulator,
+# so NV_SUPPORT_LINUX_COMPAT would give nvidia.ko/nvidia-modeset an unsatisfiable
+# MODULE_DEPEND(nvidia, linux/linux_common) -> the kext fails to autoload
+# ("depends on linux - not available"). Turning it off drops that dep + the entire
+# Linux-ioctl bridge on /dev/nvidia* (nvidia_ctl.c/nvidia_dev.c), so the chain loads
+# on the baked-in linuxkpi/drm stack exactly like i915/amdgpu/radeon. Native GPU/KMS
+# unaffected; only Linux *binaries* lose NVIDIA access (they can't run yet anyway,
+# no Linuxulator). Reversible. See pkgdemon plan nextbsd-linuxulator-plan.html.
+ed "nv-freebsd.h disable NV_SUPPORT_LINUX_COMPAT" must "$NVF" -E -e 's/define (NV_SUPPORT_LINUX_COMPAT)/undef \1/'
+ed "modeset disable NVKMS_SUPPORT_LINUX_COMPAT" must "$MSET/nvidia-modeset-freebsd.c" -E -e 's/define (NVKMS_SUPPORT_LINUX_COMPAT)/undef \1/'
 # DMAP_* removed on 15.x (OSVERSION >= 1500051) -> kva_layout.* (must: 15.1 needs it)
 ed "nvidia_subr.c DMAP->kva_layout" must "$S/nvidia_subr.c" \
 	-e 's/DMAP_MIN_ADDRESS/kva_layout.dmap_low/' \
