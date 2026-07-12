@@ -729,6 +729,9 @@ jobs:
   nvidia-build:
     name: nvidia build (nvidia/nvidia-modeset/nvidia-drm, amd64)
     if: github.event_name == 'pull_request'
+    # nvidia-drm's conftest.sh detects the DRM API by nm-ing the built drm.ko et al.
+    # (via CONFTEST_BSD_KMODPATHS), so we need drm-kmod's compiled modules artifact.
+    needs: drm-kmod
     runs-on: ubuntu-24.04
     container:
       image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:amd64-${{ (github.event.client_payload.fbsd_sha || inputs.fbsd_sha) && format('fbsd-{0}', github.event.client_payload.fbsd_sha || inputs.fbsd_sha) || 'latest' }}
@@ -801,27 +804,28 @@ jobs:
             TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
             buildenv BUILDENV_SHELL="make -C ${WRKSRC} -j${NPROC} SYSDIR=/usr/src/sys"
 
+      - name: Download drm-kmod modules (drm.ko for nvidia-drm conftest)
+        uses: actions/download-artifact@v4
+        with:
+          name: drm-kmod-modules-amd64
+          path: /tmp/drm-ko
+
       - name: Build nvidia-drm.ko against the kernel obj + drm-612 source
-        # WIP (nextbsd#384): non-fatal. NVIDIA's conftest.sh assumes a FreeBSD build
-        # HOST (sysctl kern.module_path, host build_cflags), but this modules CI
-        # cross-builds on a Linux container — so conftest can't detect the modern
-        # drm-6.12 API and nvidia-drm falls back to pre-4.19 names (drm_mode_connector_*,
-        # drm_gem_object_put_unlocked, drm_fbdev_generic_setup) that don't exist in 6.12.
-        # Real fix needs a FreeBSD build host for nvidia-drm (qemu/native runner) or a
-        # cross-patched conftest — tracked in #384. Core nvidia/nvidia-modeset build fine.
-        continue-on-error: true
         run: |
           NPROC=$(nproc)
           WRKSRC="/tmp/nvw/NVIDIA-FreeBSD-x86_64-${NVIDIA_DISTVERSION}"
           cd /usr/src
           # nvidia-drm is a separate port (graphics/nvidia-drm-612-kmod): build
-          # src/nvidia-drm with DRMKMODDIR pointing at the 6.12-lts source so its
-          # conftest.sh + drm/linuxkpi headers resolve. It binds drm.ko (drmn) at
-          # load, not build. This is the KMS bridge the NVIDIAGraphics595 kext loads.
+          # src/nvidia-drm with DRMKMODDIR = the 6.12-lts SOURCE (headers/conftest).
+          # NVIDIA's conftest.sh detects the DRM API by nm-ing the built drm.ko et al.
+          # (drm_connector_attach_encoder etc. are T-exported there). It finds them via
+          # `sysctl kern.module_path`, which fails on this Linux host — so we set
+          # CONFTEST_BSD_KMODPATHS (conftest.sh's documented override) to the built
+          # drm-kmod modules dir, skipping the sysctl. This is the cross-host fix (#384).
           ./tools/build/make.py \
             --cross-bindir="${CROSS_BINDIR}" \
             TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
-            buildenv BUILDENV_SHELL="make -C ${WRKSRC}/src/nvidia-drm -j${NPROC} SYSDIR=/usr/src/sys DRMKMODDIR=/tmp/drm-kmod/"
+            buildenv BUILDENV_SHELL="env CONFTEST_BSD_KMODPATHS=/tmp/drm-ko make -C ${WRKSRC}/src/nvidia-drm -j${NPROC} SYSDIR=/usr/src/sys DRMKMODDIR=/tmp/drm-kmod/"
 
       - name: Collect + gate the NVIDIA .ko output
         run: |
@@ -831,17 +835,11 @@ jobs:
             -exec cp -v {} /tmp/nv-ko/ \; || true
           echo "=== collected .ko files ==="
           ls -lh /tmp/nv-ko || true
-          # Core modules gate the job; nvidia-drm is WIP (conftest cross-host, #384).
-          for ko in nvidia nvidia-modeset; do
+          for ko in nvidia nvidia-modeset nvidia-drm; do
             test -f "/tmp/nv-ko/${ko}.ko" || { echo "FAIL: required ${ko}.ko not built" >&2; exit 1; }
             echo "  OK ${ko}.ko"
           done
-          if [ -f /tmp/nv-ko/nvidia-drm.ko ]; then
-            echo "  OK nvidia-drm.ko (KMS bridge built)"
-          else
-            echo "  WIP nvidia-drm.ko not built — conftest needs a FreeBSD build host (#384)"
-          fi
-          echo "nvidia-build: nvidia.ko + nvidia-modeset.ko compiled against the 15.1 kernel obj (nvidia-drm WIP)"
+          echo "nvidia-build: nvidia.ko + nvidia-modeset.ko + nvidia-drm.ko compiled against the 15.1 kernel obj + drm-612"
 
       - name: Upload NVIDIA modules artifact
         uses: actions/upload-artifact@v4
