@@ -163,8 +163,9 @@ jobs:
 
   # EXPERIMENTAL (graphics kext series, step 1): prove the drm-kmod graphics
   # drivers BUILD against our patched kernel obj before we wrap them into kexts.
-  # `6.6-lts` is the drm-kmod branch matching FreeBSD releng/15.0 (the
-  # graphics/drm-66-kmod port line). drm-kmod is out-of-tree (its own
+  # `6.12-lts` is the drm-kmod branch matching FreeBSD releng/15.1 (the
+  # graphics/drm-612-kmod port line; needs __FreeBSD_version >= 1500509, #336/#337).
+  # drm-kmod is out-of-tree (its own
   # `make SYSDIR=...`, not the kernel's make.py), so we cross-build it inside
   # FreeBSD's `buildenv` (which sets MACHINE + the cross compiler + exposes the
   # kernel opt headers from /usr/obj). Compile-only: IOGraphics.kext + the
@@ -200,9 +201,9 @@ jobs:
           done
           cp /tmp/nk/config/NEXTBSD /usr/src/sys/amd64/conf/
 
-      - name: Build drm-kmod (6.6-lts) against the kernel obj
+      - name: Build drm-kmod (6.12-lts) against the kernel obj
         run: |
-          git clone --depth 1 --branch 6.6-lts \
+          git clone --depth 1 --branch 6.12-lts \
             https://github.com/freebsd/drm-kmod.git /tmp/drm-kmod
           NPROC=$(nproc)
           cd /usr/src
@@ -257,13 +258,22 @@ jobs:
           mkdir -p pers
           # Locate the id tables in the drm-kmod checkout (paths can drift across
           # drm versions, so find them rather than hardcode).
-          I915H=$(find /tmp/drm-kmod -name i915_pciids.h | head -1)
+          I915H=$(find /tmp/drm-kmod -path '*drm/intel/i915_pciids.h' | head -1)
+          I915C=$(find /tmp/drm-kmod -path '*gpu/drm/i915/i915_pci.c'  | head -1)
           AMDC=$(find /tmp/drm-kmod -path '*amd/amdgpu/amdgpu_drv.c' | head -1)
           DRMP=$(find /tmp/drm-kmod -name drm_pciids.h | head -1)
           test -f "$I915H" || { echo "i915_pciids.h not found in drm-kmod" >&2; exit 1; }
+          test -f "$I915C" || { echo "i915_pci.c not found in drm-kmod" >&2; exit 1; }
           test -f "$AMDC"  || { echo "amdgpu_drv.c not found in drm-kmod" >&2; exit 1; }
           test -f "$DRMP"  || { echo "drm_pciids.h not found in drm-kmod" >&2; exit 1; }
-          "$T/gen-i915-personalities.sh"   "$I915H" org.nextbsd.kext.intelgraphics IntelGraphics  > pers/IntelGraphics.iokitpersonalities
+          # 6.12 (#337): i915 ids come from the driver's pciidlist[] in i915_pci.c,
+          # preprocessor-expanded via the header (the flat INTEL_VGA_DEVICE(0x..)
+          # literals are gone). gen-i915 now takes both files.
+          "$T/gen-i915-personalities.sh"   "$I915H" "$I915C" org.nextbsd.kext.intelgraphics IntelGraphics  > pers/IntelGraphics.iokitpersonalities
+          # Count-band gate: pciidlist expansion yields ~364 ids on 6.12-lts. An
+          # empty/tiny table means the extraction silently broke on a header change.
+          NIG=$(grep -oE '0x[0-9a-f]{8}' pers/IntelGraphics.iokitpersonalities | sort -u | wc -l | tr -d ' ')
+          [ "$NIG" -ge 300 ] && [ "$NIG" -le 450 ] || { echo "i915 id count $NIG out of band [300,450] — pciidlist extraction likely broke" >&2; exit 1; }
           "$T/gen-amdgpu-personalities.sh" "$AMDC"  org.nextbsd.kext.amdgraphics   AMDGraphics    > pers/AMDGraphics.iokitpersonalities
           # De-overlap: radeon yields SI/CIK to amdgpu (this build compiles amdgpu
           # WITH CONFIG_DRM_AMDGPU_SI/_CIK), so feed amdgpu's match words to -x.
