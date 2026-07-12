@@ -97,6 +97,16 @@ ed "nvidia_subr.c DMAP->kva_layout" must "$S/nvidia_subr.c" \
 DRM="$W/src/nvidia-drm"
 if [ "${NVPP_DRM:-0}" = 1 ] && [ -d "$DRM" ]; then
 	echo "== nvidia-drm post-patch (graphics/nvidia-drm-kmod/Makefile.common) =="
+	# clang-19 fix (NOT in the port — needed because clang>=16 makes implicit
+	# function/int declarations hard errors by default). NVIDIA's "functions"
+	# conftests are inverted: a MISSING function must COMPILE (as an implicit decl)
+	# to be ruled absent. NV_CONFTEST_CFLAGS lacks -Wno-implicit-function-declaration
+	# (it's only in conftest.sh's build_cflags, which the FreeBSD compile_tests path
+	# doesn't use), so every removed-in-6.12 function reads as PRESENT and nvidia-drm
+	# calls pre-4.19 names that no longer exist. Add the same suppressions build_cflags
+	# uses so the conftest logic resolves correctly against drm-612.
+	ed "drm conftest allow implicit decls (clang-19)" must "$DRM/Makefile" \
+		-e 's/NV_CONFTEST_CFLAGS += -Wno-error=redundant-decls/& -Wno-implicit-function-declaration -Wno-implicit-int -Wno-strict-prototypes/'
 	# delete only the DRMKMODDIR dummy/include -I line (anchored — do NOT match the
 	# always-active sys/compat continuation line)
 	ed "drm Makefile drop dummy/include" opt "$DRM/Makefile" -e '/DRMKMODDIR.*\/linuxkpi\/dummy\/include/d'
