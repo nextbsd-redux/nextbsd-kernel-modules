@@ -568,7 +568,7 @@ jobs:
   # publishes once — no release-creation race). PRs build but never reach here.
   publish:
     name: publish continuous
-    needs: [modules, drm-kmod]
+    needs: [modules, drm-kmod, nvidia-build]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
@@ -688,6 +688,23 @@ jobs:
             echo "==> graphics-kexts.tar.gz: $(du -sh out/graphics-kexts.tar.gz | cut -f1)"
           fi
 
+      # NVIDIA: the chained NVIDIAGraphics595 kext (+ modeset/core) already carries
+      # its GSP firmware (bundled at wrap time via ko2kext -f), so unlike the drm
+      # stack there's no firmware to inject here — just ship it. Asset name matches
+      # nextbsd-pkg's `*kext*.tar.gz` ingest glob, so it's packaged automatically.
+      - name: Bundle NVIDIA kexts (NVIDIAGraphics595 + chain)
+        run: |
+          set -eu
+          NV=$(find artifacts/nvidia-kexts-amd64 -maxdepth 2 -name 'NVIDIAGraphics595.kext' -type d 2>/dev/null | head -1)
+          if [ -z "$NV" ]; then
+            echo "WARN: nvidia-kexts-amd64 artifact has no kexts — skipping nvidia kexts"
+          else
+            NDIR=$(dirname "$NV")
+            echo "nvidia kexts at: $NDIR"; ls -1 "$NDIR"
+            tar -C "$NDIR" -czf out/nvidia-kexts.tar.gz .
+            echo "==> nvidia-kexts.tar.gz: $(du -sh out/nvidia-kexts.tar.gz | cut -f1)"
+          fi
+
       # Stable asset names → each publish overwrites in place; no stale pileup.
       - name: Publish to continuous release
         uses: softprops/action-gh-release@v2
@@ -728,7 +745,8 @@ jobs:
   # gates nothing (publish untouched) so it can be iterated freely.
   nvidia-build:
     name: nvidia build (nvidia/nvidia-modeset/nvidia-drm, amd64)
-    if: github.event_name == 'pull_request'
+    # Runs on PRs (compile check) and on main (so publish can ship the kexts).
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     # nvidia-drm's conftest.sh detects the DRM API by nm-ing the built drm.ko et al.
     # (via CONFTEST_BSD_KMODPATHS), so we need drm-kmod's compiled modules artifact.
     needs: drm-kmod
