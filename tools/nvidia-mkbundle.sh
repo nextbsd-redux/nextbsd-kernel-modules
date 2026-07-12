@@ -51,10 +51,16 @@ cp1 "$OBJ/libglxserver_nvidia.so.1"  "$R/xorg/extensions/"
 ln -sf libglxserver_nvidia.so.1 "$R/xorg/extensions/libglxserver_nvidia.so"
 
 # --- client libs (Resources/lib): copy each soname (real files in obj/), add .so dev link ---
+# The set must be DT_NEEDED-CLOSED: any libnvidia-* our own binaries link against but
+# we fail to ship becomes a pkg(8) `shlibs_required` with no provider, and pkg resolves
+# it by pulling in FreeBSD's nvidia-driver as a hard dependency (which is exactly what
+# we're replacing). libnvidia-gpucomp is needed by glcore/eglcore — do not drop it.
+# The closure self-check below enforces this.
 for so in libGLX_nvidia.so.0 libEGL_nvidia.so.0 \
           libnvidia-glcore.so.1 libnvidia-glsi.so.1 libnvidia-cfg.so.1 libnvidia-tls.so.1 \
-          libnvidia-eglcore.so.1 libnvidia-glvkspirv.so.1 \
-          libnvidia-egl-gbm.so.1 libnvidia-allocator.so.1; do
+          libnvidia-eglcore.so.1 libnvidia-glvkspirv.so.1 libnvidia-gpucomp.so.1 \
+          libnvidia-egl-gbm.so.1 libnvidia-allocator.so.1 \
+          libnvidia-ml.so.1 libnvidia-vulkan-producer.so.1; do
   if [ -f "$OBJ/$so" ]; then
     cp "$OBJ/$so" "$R/lib/$so"
     ln -sf "$so" "$R/lib/${so%.so.*}.so"           # libFoo.so -> libFoo.so.N
@@ -62,6 +68,29 @@ for so in libGLX_nvidia.so.0 libEGL_nvidia.so.0 \
 done
 # Mesa's libgbm dlopen's lib<drmdriver>_gbm.so — for nvidia-drm that's the allocator
 ln -sf ../libnvidia-allocator.so.1 "$R/lib/gbm/nvidia-drm_gbm.so"
+
+# --- closure self-check: every NVIDIA lib our own binaries NEED must be in the bundle ---
+# Guards the bug class above (a dangling NEEDED silently turns into a hard dep on
+# FreeBSD's nvidia-driver at pkg-install time). Fails the build loudly instead.
+if command -v readelf >/dev/null 2>&1; then
+  MISS=""
+  for f in "$R"/xorg/drivers/*.so "$R"/xorg/extensions/*.so.1 "$R"/lib/*.so.*; do
+    [ -f "$f" ] || continue
+    for n in $(readelf -d "$f" 2>/dev/null | sed -n 's/.*NEEDED.*\[\(lib[^]]*\)\].*/\1/p'); do
+      case "$n" in
+        *nvidia*) [ -e "$R/lib/$n" ] || MISS="$MISS $(basename "$f")->$n" ;;
+      esac
+    done
+  done
+  if [ -n "$MISS" ]; then
+    echo "FAIL: bundle missing NVIDIA libs its own binaries NEED:$MISS" >&2
+    echo "  pkg(8) would resolve these to FreeBSD's nvidia-driver and pull it in as a dep" >&2
+    exit 1
+  fi
+  echo "  NVIDIA lib closure OK (no dangling NEEDED)"
+else
+  echo "  WARN: no readelf — skipping NVIDIA lib closure check" >&2
+fi
 
 # --- GLVND / EGL-external-platform / Vulkan vendor JSONs (NVIDIA-shipped) ---
 cp1   "$OBJ/10_nvidia.json"          "$R/share/glvnd/egl_vendor.d/"
