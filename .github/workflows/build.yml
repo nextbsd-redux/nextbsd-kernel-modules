@@ -17,6 +17,8 @@ on:
       - 'tools/gen-radeon-personalities.sh'
       - 'tools/gen-nvidia-personalities.sh'
       - 'tools/nvidia-portpatch.sh'
+      - 'tools/nvidia-mkbundle.sh'
+      - 'tools/nvidia-activate.sh'
       - 'tests/kext-boot-test.sh'
       - 'tests/personalities-selftest.sh'
   workflow_dispatch:
@@ -898,6 +900,37 @@ jobs:
             /tmp/nv-ko/nvidia-drm.ko NVIDIAGraphics595 org.nextbsd.driver.nvidiagraphics595
           echo "=== wrapped kexts ==="
           for d in "$O"/*.kext; do echo "  $(basename "$d") ($(du -sh "$d"|cut -f1))"; done
+
+      # Userland half (#385 follow-on): a GPU driver is two layers — the kexts above
+      # are the kernel half; this stages NVIDIA's precompiled X11/GL/EGL/GBM userland
+      # from the SAME tarball's obj/ into a version-locked sibling NVIDIA595.bundle,
+      # dropped INTO the nvidia-kexts dir so it rides the artifact + nvidia-kexts.tar.gz
+      # into NextBSD-kernel-extensions (nextbsd-pkg runs the bundle's nvidia-activate.sh
+      # to symlink it into /usr/local). No compile — pure stage. Repeatable per branch.
+      - name: Stage the NVIDIA595 userland bundle (sibling to the kexts)
+        run: |
+          set -eu
+          WRKSRC="/tmp/nvw/NVIDIA-FreeBSD-x86_64-${NVIDIA_DISTVERSION}"
+          chmod +x nbkm-tools/tools/nvidia-mkbundle.sh nbkm-tools/tools/nvidia-activate.sh
+          nbkm-tools/tools/nvidia-mkbundle.sh "$WRKSRC" "${NVIDIA_DISTVERSION}" nvidia-kexts
+          B=nvidia-kexts/NVIDIA595.bundle
+          for f in Contents/Info.plist \
+                   Contents/Resources/xorg/drivers/nvidia_drv.so \
+                   Contents/Resources/xorg/extensions/libglxserver_nvidia.so.1 \
+                   Contents/Resources/lib/libGLX_nvidia.so.0 \
+                   Contents/Resources/lib/libnvidia-glcore.so.1 \
+                   Contents/Resources/lib/gbm/nvidia-drm_gbm.so \
+                   Contents/Resources/share/glvnd/egl_vendor.d/10_nvidia.json \
+                   Contents/Resources/etc/libmap.d/nvidia.conf \
+                   Contents/Resources/nvidia-activate.sh; do
+            test -e "$B/$f" || { echo "FAIL: NVIDIA595.bundle missing $f" >&2; exit 1; }
+          done
+          test -f "$B/Contents/Resources/lib/gbm/nvidia-drm_gbm.so" \
+            || { echo "FAIL: gbm backend symlink dangling" >&2; exit 1; }
+          echo "=== nvidia-kexts dir now holds (kernel kexts + userland bundle) ==="
+          for d in nvidia-kexts/*.kext nvidia-kexts/*.bundle; do
+            [ -e "$d" ] && echo "  $(basename "$d") ($(du -sh "$d"|cut -f1))"
+          done
 
       - name: Validate the NVIDIA kext bundles
         run: |
