@@ -911,20 +911,23 @@ jobs:
       - name: Fetch Mesa's libgbm.so.1 loader (build-time only, no mesa/LLVM runtime dep)
         run: |
           set -eu
-          command -v zstd >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq zstd; }
+          # We run inside the kernel-toolchain container as root: no sudo, and zstd is
+          # not in the image. pkg(8) repo files are zstd tarballs, so make sure we can
+          # read one. (readelf is already present — the bundle closure check uses it.)
+          if ! command -v zstd >/dev/null 2>&1; then
+            apt-get update -qq && apt-get install -y -qq --no-install-recommends zstd
+          fi
           REPO="https://pkg.FreeBSD.org/FreeBSD:15:amd64/latest"
           W=/tmp/gbm; rm -rf "$W"; mkdir -p "$W"
           # Resolve mesa-libs' hashed repopath out of the repo catalogue (it is version
-          # -stamped, so it cannot be hardcoded without rotting).
+          # -stamped, so it cannot be hardcoded without rotting). packagesite.yaml is one
+          # compact JSON object per line — no jq/python needed, and neither is guaranteed
+          # to be in this container.
           curl -fsSL -o "$W/packagesite.pkg" "$REPO/packagesite.pkg"
           zstd -dc "$W/packagesite.pkg" | tar -xf - -C "$W" packagesite.yaml
-          REPOPATH=$(python3 -c "
-          import json,sys
-          for l in open('$W/packagesite.yaml'):
-              d=json.loads(l)
-              if d['name']=='mesa-libs':
-                  print(d['repopath']); sys.exit(0)
-          sys.exit('mesa-libs absent from repo catalogue')")
+          REPOPATH=$(grep -m1 '"name":"mesa-libs"' "$W/packagesite.yaml" \
+                     | sed -n 's/.*"repopath":"\([^"]*\)".*/\1/p')
+          [ -n "$REPOPATH" ] || { echo "FAIL: mesa-libs absent from the repo catalogue" >&2; exit 1; }
           echo "  mesa-libs -> $REPOPATH"
           curl -fsSL -o "$W/mesa-libs.pkg" "$REPO/$REPOPATH"
           zstd -dc "$W/mesa-libs.pkg" | tar -xf - -C "$W" 2>/dev/null || true
