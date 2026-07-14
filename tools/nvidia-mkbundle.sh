@@ -69,27 +69,73 @@ done
 # Mesa's libgbm dlopen's lib<drmdriver>_gbm.so — for nvidia-drm that's the allocator
 ln -sf ../libnvidia-allocator.so.1 "$R/lib/gbm/nvidia-drm_gbm.so"
 
-# --- closure self-check: every NVIDIA lib our own binaries NEED must be in the bundle ---
-# Guards the bug class above (a dangling NEEDED silently turns into a hard dep on
-# FreeBSD's nvidia-driver at pkg-install time). Fails the build loudly instead.
+# --- Mesa's libgbm.so.1 loader (Resources/lib) ---
+# WHY A MESA LIB LIVES IN THE NVIDIA BUNDLE: libnvidia-egl-gbm.so.1 — the EGL-on-GBM
+# external platform, used by any KMS/GBM compositor (Wayland, and our own WindowServer)
+# — DT_NEEDs libgbm.so.1. Ship it and pkg(8) records it as shlibs_provided; omit it and
+# pkg records an unsatisfied shlibs_required and resolves it to mesa-libs, which carries
+# libgallium, which NEEDs libLLVM.so.19.1 — a library FreeBSD only ships inside the
+# 1.9 GB llvm19 TOOLCHAIN package. That is how a *kernel-extensions* package came to
+# hard-depend on LLVM and pushed the base image past GitHub's 2 GiB asset cap.
+#
+# The loader is LLVM-free by construction. Measured DT_NEEDED on Mesa 26.1.4:
+#     libgbm.so.1     14 KB   libdrm.so.2, libthr.so.3, libc.so.7            <- no LLVM
+#     gbm/dri_gbm.so 120 KB   libgallium-26.1.4.so -> libLLVM.so.19.1        <- never shipped
+# The LLVM lives in Mesa's *backend*, not in the loader. On nvidia-drm the backend is
+# nvidia-drm_gbm.so -> libnvidia-allocator.so.1 (symlinked just above), so Mesa's
+# gallium/LLVM path is never loaded at all. Mesa is MIT — redistribution is fine.
+#
+# Source: $NVBUNDLE_LIBGBM (CI extracts it from the mesa-libs package), else the build
+# host's own /usr/local/lib/libgbm.so.1 on FreeBSD.
+LIBGBM="${NVBUNDLE_LIBGBM:-/usr/local/lib/libgbm.so.1}"
+if [ -f "$R/lib/libnvidia-egl-gbm.so.1" ]; then
+  [ -f "$LIBGBM" ] || {
+    echo "FAIL: libgbm.so.1 not found (looked for: $LIBGBM)" >&2
+    echo "  libnvidia-egl-gbm.so.1 DT_NEEDs it. Without it in the bundle, pkg(8) resolves" >&2
+    echo "  libgbm.so.1 to mesa-libs and drags llvm19 (1.9 GB installed) into the image." >&2
+    echo "  Set NVBUNDLE_LIBGBM=<path to libgbm.so.1>, or drop libnvidia-egl-gbm from the" >&2
+    echo "  copy list above (which also drops the EGL-on-GBM platform). See nextbsd#388." >&2
+    exit 1
+  }
+  cp "$LIBGBM" "$R/lib/libgbm.so.1"                 # cp dereferences: real file, SONAME-named
+  ln -sf libgbm.so.1 "$R/lib/libgbm.so"
+  echo "  bundled Mesa libgbm.so.1 loader from $LIBGBM"
+fi
+
+# --- closure self-check: every lib our own binaries NEED that must come from INSIDE the
+# --- bundle (NVIDIA's own libs, plus Mesa's libgbm loader) has to actually be here ---
+# Guards the bug class above: a dangling NEEDED silently turns into a pkg(8) dependency —
+# on FreeBSD's nvidia-driver for a libnvidia-*, or on mesa-libs -> llvm19 for libgbm.
+# Fails the build loudly instead.
 if command -v readelf >/dev/null 2>&1; then
   MISS=""
   for f in "$R"/xorg/drivers/*.so "$R"/xorg/extensions/*.so.1 "$R"/lib/*.so.*; do
     [ -f "$f" ] || continue
     for n in $(readelf -d "$f" 2>/dev/null | sed -n 's/.*NEEDED.*\[\(lib[^]]*\)\].*/\1/p'); do
       case "$n" in
-        *nvidia*) [ -e "$R/lib/$n" ] || MISS="$MISS $(basename "$f")->$n" ;;
+        *nvidia*|libgbm.so.*) [ -e "$R/lib/$n" ] || MISS="$MISS $(basename "$f")->$n" ;;
       esac
     done
   done
   if [ -n "$MISS" ]; then
-    echo "FAIL: bundle missing NVIDIA libs its own binaries NEED:$MISS" >&2
-    echo "  pkg(8) would resolve these to FreeBSD's nvidia-driver and pull it in as a dep" >&2
+    echo "FAIL: bundle missing libs its own binaries NEED:$MISS" >&2
+    echo "  pkg(8) would resolve these to nvidia-driver / mesa-libs and pull them in as deps" >&2
     exit 1
   fi
-  echo "  NVIDIA lib closure OK (no dangling NEEDED)"
+  echo "  bundle lib closure OK (no dangling NEEDED)"
+
+  # The bundled loader must STAY LLVM-free. If a future Mesa fuses gallium into
+  # libgbm itself, bundling it would silently re-introduce the very edge we removed.
+  if [ -f "$R/lib/libgbm.so.1" ]; then
+    if readelf -d "$R/lib/libgbm.so.1" | grep -qE 'NEEDED.*(gallium|LLVM)'; then
+      echo "FAIL: bundled libgbm.so.1 NEEDs gallium/LLVM — avoiding that is the whole point" >&2
+      readelf -d "$R/lib/libgbm.so.1" | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/    NEEDED \1/p' >&2
+      exit 1
+    fi
+    echo "  bundled libgbm.so.1 is LLVM-free (no gallium/libLLVM in NEEDED)"
+  fi
 else
-  echo "  WARN: no readelf — skipping NVIDIA lib closure check" >&2
+  echo "  WARN: no readelf — skipping bundle lib closure check" >&2
 fi
 
 # --- GLVND / EGL-external-platform / Vulkan vendor JSONs (NVIDIA-shipped) ---
