@@ -35,6 +35,18 @@ link_dir() {
 		[ -e "$_f" ] || [ -L "$_f" ] || continue
 		# skip real subdirs (e.g. lib/gbm) — each has its own explicit link_dir call
 		[ -d "$_f" ] && [ ! -L "$_f" ] && continue
+		# Do NOT expose libgbm on the canonical /usr/local/lib path. Ports
+		# mesa-libs owns /usr/local/lib/libgbm.so{,.1}; a symlink here makes
+		# pkg(8) resolve the file conflict by silently DEINSTALLING this whole
+		# package (ASSUME_ALWAYS_YES) when a downstream build pulls in mesa-libs
+		# — which is how the ISO shipped with empty /System/Library/Extensions.
+		# The bundle still SHIPS libgbm.so.1 (Resources/lib), so pkg records it
+		# as shlibs_provided and no mesa-libs/llvm dependency is added;
+		# libnvidia-egl-gbm resolves mesa's libgbm once the user installs
+		# mesa-libs for OpenGL. See nextbsd-kernel-modules libgbm-eviction fix.
+		case "$(basename "$_f")" in
+		libgbm.so|libgbm.so.*) continue ;;
+		esac
 		ln -sf "$BUNDLE/Contents/Resources/$1/$(basename "$_f")" "$_dst/$(basename "$_f")"
 	done
 }
