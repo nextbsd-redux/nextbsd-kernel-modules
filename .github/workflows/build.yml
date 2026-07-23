@@ -49,7 +49,11 @@ jobs:
     steps:
       - name: Download kernel obj tree from kernel continuous release
         env:
-          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          # Public cross-repo READ — needs no PAT: the built-in github.token
+          # authenticates gh for public reads and is present on fork PRs
+          # (forks never get secrets). PAT stays on dispatch-only steps. See
+          # nextbsd-kernel#58.
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /usr/obj
           # Pull the CI-gated kernel obj tree from nextbsd-kernel's rolling
@@ -183,7 +187,11 @@ jobs:
     steps:
       - name: Download kernel obj tree from kernel continuous release
         env:
-          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          # Public cross-repo READ — needs no PAT: the built-in github.token
+          # authenticates gh for public reads and is present on fork PRs
+          # (forks never get secrets). PAT stays on dispatch-only steps. See
+          # nextbsd-kernel#58.
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /usr/obj
           gh release download continuous \
@@ -504,7 +512,11 @@ jobs:
 
       - name: Download nextbsd continuous image
         env:
-          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          # Public cross-repo READ — needs no PAT: the built-in github.token
+          # authenticates gh for public reads and is present on fork PRs
+          # (forks never get secrets). PAT stays on dispatch-only steps. See
+          # nextbsd-kernel#58.
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release download continuous -R nextbsd-redux/nextbsd \
             --pattern '*.img.zip' --dir iso --clobber
@@ -761,7 +773,11 @@ jobs:
     steps:
       - name: Download kernel obj tree from kernel continuous release
         env:
-          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          # Public cross-repo READ — needs no PAT: the built-in github.token
+          # authenticates gh for public reads and is present on fork PRs
+          # (forks never get secrets). PAT stays on dispatch-only steps. See
+          # nextbsd-kernel#58.
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /usr/obj
           gh release download continuous \
