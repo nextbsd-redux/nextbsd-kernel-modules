@@ -1,4 +1,15 @@
-
+# drm_extra_helpers -- the DRM GEM/KMS helper layer drm-kmod does not compile.
+#
+# drm-kmod (6.12-lts) ships ttm/ + drm_gem_ttm_helper, but not the convenience
+# helpers the small virtual-GPU drivers sit on. Per the graphics plan, they are
+# built ONCE here and exported rather than bundled into each driver: bochs and
+# vboxvideo both need the VRAM helper, and two modules each carrying it would
+# collide on EXPORT_SYMS.
+#
+#   drm_simple_kms_helper.c   pure drm-core, low risk         (bochs)
+#   drm_gem_vram_helper.c     TTM-coupled VRAM GEM, the gate  (bochs, vboxvideo)
+#
+# Sources are vendored UNMODIFIED from Linux v6.12, matching drm-kmod's 6.12-lts.
 #
 # Modelled on drm-kmod's i915/Makefile, NOT dummygfx/Makefile: dummygfx is stale
 # (it is absent from DEFAULT_KMODS and -include's a drm_os_config.h that no

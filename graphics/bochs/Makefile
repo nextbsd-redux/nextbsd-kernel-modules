@@ -1,4 +1,15 @@
-
+# bochs -- KMS driver for the Bochs/stdvga display (PCI 1234:1111).
+#
+# P0 of the graphics plan: it binds qemu's DEFAULT -vga std device, so the kext
+# device-matches in CI with no qemu reconfiguration, and it matches as a raw
+# IOPCIPrimaryMatch node -- reusing the existing match/kextd/load/bind machinery
+# unchanged. ~740 LOC, pure MMIO, no command FIFO and no hypervisor backdoor.
+#
+# Depends on drm_extra_helpers.ko for drm_simple_kms_helper + drm_gem_vram_helper,
+# which drm-kmod does not compile. Source vendored UNMODIFIED from Linux v6.12;
+# its tail is drm_module_pci_driver(), which drm-kmod's include/drm/drm_module.h
+# already provides (mapping onto LinuxKPI module_driver/pci_register_driver), so
+# the FreeBSD glue is only the kld dependency edges.
 #
 # Modelled on drm-kmod's i915/Makefile, NOT dummygfx/Makefile: dummygfx is stale
 # (it is absent from DEFAULT_KMODS and -include's a drm_os_config.h that no
