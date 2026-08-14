@@ -259,6 +259,57 @@ jobs:
         with:
           path: nbkm-tools
 
+      # EXPERIMENTAL (graphics kext series, step 2): build the DRM GEM/KMS
+      # helper layer drm-kmod does not compile. Per the graphics plan, the real
+      # cost of every small virtual-GPU driver (bochs, vboxvideo, virtio-gpu) is
+      # NOT the driver .c file -- it is these helpers, which drm-kmod omits:
+      #
+      #   drm_simple_kms_helper.c   ~460 LOC, pure drm-core     (bochs)
+      #   drm_gem_vram_helper.c    ~1130 LOC, TTM-coupled       (bochs, vboxvideo)
+      #
+      # Built ONCE as drm_extra_helpers.ko and exported, so two drivers can not
+      # collide on EXPORT_SYMS. Sources are vendored UNMODIFIED from Linux v6.12
+      # (matching drm-kmod 6.12-lts) under graphics/ in this repo; the drm-kmod
+      # checkout at /tmp/drm-kmod stays an untouched upstream clone apart from
+      # this build-time vendoring, so it remains rebaseable.
+      #
+      # Compile-only, and deliberately non-gating while the linuxkpi gaps are
+      # being closed: the point of this step right now is to PRINT the missing
+      # symbols/headers, turning the plan's "1-2 weeks, blocker = vram helper"
+      # estimate into a measured task list.
+      - name: Build drm_extra_helpers.ko (vendored DRM helpers)
+        continue-on-error: true
+        run: |
+          set -eu
+          cp nbkm-tools/graphics/drivers/gpu/drm/*.c /tmp/drm-kmod/drivers/gpu/drm/
+          cp nbkm-tools/graphics/include/drm/*.h     /tmp/drm-kmod/include/drm/
+          cp -R nbkm-tools/graphics/drm_extra_helpers /tmp/drm-kmod/
+          NPROC=$(nproc)
+          cd /usr/src
+          ./tools/build/make.py \
+            --cross-bindir="${CROSS_BINDIR}" \
+            TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
+            buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod/drm_extra_helpers -j${NPROC} SYSDIR=/usr/src/sys" \
+            2>&1 | tee /tmp/extra-helpers-build.log
+
+      - name: Summarize helper build gaps
+        if: always()
+        run: |
+          if [ -f /tmp/drm-kmod/drm_extra_helpers/drm_extra_helpers.ko ]; then
+            echo "HELPERS-OK: drm_extra_helpers.ko built"
+            ls -lh /tmp/drm-kmod/drm_extra_helpers/drm_extra_helpers.ko
+            exit 0
+          fi
+          echo "HELPERS-INCOMPLETE — measured gaps follow (this is the deliverable)"
+          echo "=== missing headers ==="
+          grep -oE "fatal error: '[^']+' file not found" /tmp/extra-helpers-build.log 2>/dev/null | sort -u || true
+          echo "=== undeclared identifiers / implicit decls ==="
+          grep -oE "(use of undeclared identifier|implicit declaration of function) '[^']+'" /tmp/extra-helpers-build.log 2>/dev/null | sort -u | head -60 || true
+          echo "=== incomplete types ==="
+          grep -oE "incomplete type '[^']+'" /tmp/extra-helpers-build.log 2>/dev/null | sort -u | head -30 || true
+          echo "=== error count ==="
+          grep -c "error:" /tmp/extra-helpers-build.log 2>/dev/null || echo 0
+
       - name: Generate graphics IOKitPersonalities from drm-kmod source
         run: |
           set -eu
