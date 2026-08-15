@@ -445,6 +445,7 @@ void drm_gem_fb_vunmap(struct drm_framebuffer *fb, struct iosys_map *map)
 }
 EXPORT_SYMBOL(drm_gem_fb_vunmap);
 
+#ifndef __FreeBSD__
 static void __drm_gem_fb_end_cpu_access(struct drm_framebuffer *fb, enum dma_data_direction dir,
 					unsigned int num_planes)
 {
@@ -466,6 +467,7 @@ static void __drm_gem_fb_end_cpu_access(struct drm_framebuffer *fb, enum dma_dat
 				ret, num_planes, dir);
 	}
 }
+#endif /* !__FreeBSD__ -- only used by the excluded cpu-access helpers */
 
 #ifndef __FreeBSD__
 /**
