@@ -191,7 +191,12 @@ if {$gfx_test} {
             "kextload: loaded" { puts "\nOK: GFX-LOAD $k" }
             "already loaded"   { puts "\nOK: GFX-LOAD $k (already loaded)" }
             -re {kldload\([^\n]*\n} {
-                puts "\nFAIL: GFX-LOAD $k errored: $expect_out(0,string)"; exit 1
+                puts "\nFAIL: GFX-LOAD $k errored: $expect_out(0,string)"
+                # Dump why before bailing: a bare ENOEXEC says nothing, and a
+                # second CI cycle to learn it costs 20 minutes.
+                send "kldstat\r"; expect { timeout {} -re {[#%$] $} {} }
+                send "dmesg | tail -25\r"; expect { timeout {} -re {[#%$] $} {} }
+                exit 1
             }
             -re "not a bundle" { puts "\nFAIL: GFX-LOAD $k is not a readable bundle"; exit 1 }
         }

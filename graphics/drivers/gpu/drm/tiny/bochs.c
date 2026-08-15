@@ -701,15 +701,6 @@ static int bochs_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent
 	unsigned long fbsize;
 	int ret;
 
-#ifdef __FreeBSD__
-	/* The gate drm_pci_register_driver_if_modeset() applies on Linux; see
-	 * the registration macro at the bottom of this file for why it moved. */
-	if (bochs_modeset == 0)
-		return -ENODEV;
-	if (drm_firmware_drivers_only() && bochs_modeset == -1)
-		return -ENODEV;
-#endif
-
 	fbsize = pci_resource_len(pdev, 0);
 	if (fbsize < 4 * 1024 * 1024) {
 		DRM_ERROR("less than 4 MB video memory, ignoring device\n");
@@ -802,19 +793,41 @@ static struct pci_driver bochs_pci_driver = {
 
 #ifdef __FreeBSD__
 /*
- * drm_module_pci_driver_if_modeset() expands to
- *     module_driver(drv, reg, unreg, __modeset)
- * -- four arguments. Linux's module_driver() is variadic and swallows the
- * extra one; FreeBSD's linuxkpi defines it with exactly three
- * (sys/compat/linuxkpi/common/include/linux/device/driver.h:17), so the macro
- * cannot expand here at all. Nothing in drm-kmod hits this because i915,
- * amdgpu and radeon all register by hand.
+ * Register the way every drm-kmod driver does, for two reasons.
  *
- * Register unconditionally with the three-argument form and enforce the
- * modeset tunable in probe instead, which is what the _if_modeset wrapper
- * does on Linux (see drm_pci_register_driver_if_modeset()).
+ * 1. drm_module_pci_driver_if_modeset() expands to
+ *        module_driver(drv, reg, unreg, __modeset)
+ *    -- four arguments. Linux's module_driver() is variadic and swallows the
+ *    fourth; FreeBSD's linuxkpi declares it with exactly three
+ *    (linux/device/driver.h:17), so that macro cannot expand here at all.
+ *
+ * 2. More fundamentally, the whole drm_module_pci_driver() family only emits
+ *    SYSINITs -- it never declares a FreeBSD module. Without DECLARE_MODULE
+ *    the .ko carries dependency metadata for a module named "bochs" that does
+ *    not exist, and kldload rejects the file outright with ENOEXEC ("Exec
+ *    format error"). LKPI_DRIVER_MODULE is drm-kmod's answer: it builds the
+ *    moduledata_t and DECLARE_MODULEs it, which is why i915, amdgpu and radeon
+ *    all use it rather than the drm_module_* macros.
+ *
+ * drm_pci_{,un}register_driver_if_modeset() are the same helpers the Linux
+ * macro would have called, so the modeset semantics are preserved exactly:
+ * refuse when modeset==0, and when firmware-drivers-only is set with modeset
+ * unspecified.
  */
-drm_module_pci_driver(bochs_pci_driver);
+static int __init
+bochs_drm_init(void)
+{
+	return (drm_pci_register_driver_if_modeset(&bochs_pci_driver,
+	    bochs_modeset));
+}
+
+static void __exit
+bochs_drm_exit(void)
+{
+	drm_pci_unregister_driver_if_modeset(&bochs_pci_driver, bochs_modeset);
+}
+
+LKPI_DRIVER_MODULE(bochs, bochs_drm_init, bochs_drm_exit);
 #else
 drm_module_pci_driver_if_modeset(bochs_pci_driver, bochs_modeset);
 #endif
