@@ -23,6 +23,22 @@ drm_extra_helpers_exit(void)
 
 LKPI_DRIVER_MODULE(drm_extra_helpers, drm_extra_helpers_init,
     drm_extra_helpers_exit);
+
+/*
+ * REQUIRED, not decorative. This module exists to be depended on: bochs (and
+ * later vboxvideo) carry MODULE_DEPEND(<drv>, drm_extra_helpers, 1, 1, 1), and
+ * FreeBSD cannot satisfy a versioned dependency against a module that never
+ * declared a version. Without this the dependent's kldload fails with
+ *
+ *     KLD <drv>: depends on drm_extra_helpers - not available or version mismatch
+ *     linker_load_file: ... - unsupported file type
+ *
+ * which surfaces to kextload as a bare "Exec format error" -- an unhelpful
+ * message for a dependency problem, and exactly how iteration 11 failed.
+ * drm-kmod declares versions for drmn/ttm/linuxkpi for the same reason, which
+ * is why those three edges resolved while this one did not.
+ */
+MODULE_VERSION(drm_extra_helpers, 1);
 MODULE_DEPEND(drm_extra_helpers, drmn, 2, 2, 2);
 MODULE_DEPEND(drm_extra_helpers, ttm, 1, 1, 1);
 MODULE_DEPEND(drm_extra_helpers, linuxkpi, 1, 1, 1);
