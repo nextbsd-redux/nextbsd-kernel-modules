@@ -16,6 +16,7 @@ sit on. Verified against `6.12-lts` @ `01682db`:
 | `drm_simple_kms_helper.c` (+ header) | **missing** |
 | `drm_gem_vram_helper.c` (+ header) | **missing** |
 | `drm_gem_shmem_helper.c` | **missing** (virtio-gpu needs it) |
+| `drm_gem_framebuffer_helper.c` | **a 76-line stub** — implements 3 of the functions its own header declares; `drm_gem_fb_create` is absent |
 
 So the plan's central finding holds at 6.12: *the cost of a small virtual-GPU
 driver is the helper layer, not the driver*.

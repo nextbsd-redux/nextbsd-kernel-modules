@@ -29,6 +29,7 @@ EXPORT_SYMS=	YES
 SRCS=	\
 	drm_simple_kms_helper.c \
 	drm_gem_vram_helper.c \
+	drm_gem_framebuffer_helper.c \
 	drm_extra_helpers_freebsd.c
 
 SRCS	+=			\
