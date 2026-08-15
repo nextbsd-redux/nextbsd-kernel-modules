@@ -56,7 +56,11 @@ echo "==> using UEFI firmware: $OVMF"
 
 KEXT_PATH=/System/Library/Extensions/Nmdm.kext
 IWIFI_PATH=/System/Library/Extensions/IntelWiFi.kext
-export ACCEL_FLAGS OVMF KEXT_PATH IWIFI_PATH
+# Graphics stack (nextbsd-kernel-modules#30). GFX_TEST=0 skips those stages, so
+# the PoC still runs on images/branches without the graphics kexts injected.
+GFX_TEST=${GFX_TEST:-1}
+BOCHS_PATH=/System/Library/Extensions/BochsGraphics.kext
+export ACCEL_FLAGS OVMF KEXT_PATH IWIFI_PATH GFX_TEST BOCHS_PATH
 
 cat > "$EXP" <<'EOF'
 set timeout 480
@@ -67,6 +71,8 @@ set img [lindex $argv 0]
 set accel_flags [split $env(ACCEL_FLAGS) " "]
 set kext $env(KEXT_PATH)
 set iwifi $env(IWIFI_PATH)
+set gfx_test $env(GFX_TEST)
+set bochs $env(BOCHS_PATH)
 
 eval spawn qemu-system-x86_64 \
     -m 4G \
@@ -165,6 +171,55 @@ expect {
     timeout { puts "\nFAIL: INTELWIFI-STAT timed out"; exit 1 }
     "IWIFI_ABSENT"  { puts "\nFAIL: IntelWiFi loaded but not visible in kextstat"; exit 1 }
     "IWIFI_PRESENT" { puts "\nOK: INTELWIFI-STAT (driver visible via kldstat)" }
+}
+
+# ---------------------------------------------------------------------------
+# Stages 9-12: the graphics stack. Unlike IntelWiFi (which loads but never
+# binds, since qemu emulates no Intel WiFi), bochs SHOULD bind here: q35's
+# default -vga std IS the Bochs/stdvga device, PCI 1234:1111, which is exactly
+# what BochsGraphics.kext's IOPCIPrimaryMatch names. So this is the first test
+# in the tree that can prove match -> load -> bind -> KMS, not just load.
+#
+# Loaded explicitly in dependency order rather than relying on kextload to walk
+# OSBundleLibraries, so a failure names the layer that broke.
+# ---------------------------------------------------------------------------
+if {$gfx_test} {
+    foreach k {DMABuf IOGraphics TTM IOGraphicsExtras BochsGraphics} {
+        send "kextload /System/Library/Extensions/$k.kext\r"
+        expect {
+            timeout { puts "\nFAIL: GFX-LOAD $k timed out"; exit 1 }
+            "kextload: loaded" { puts "\nOK: GFX-LOAD $k" }
+            "already loaded"   { puts "\nOK: GFX-LOAD $k (already loaded)" }
+            -re {kldload\([^\n]*\n} {
+                puts "\nFAIL: GFX-LOAD $k errored: $expect_out(0,string)"; exit 1
+            }
+            -re "not a bundle" { puts "\nFAIL: GFX-LOAD $k is not a readable bundle"; exit 1 }
+        }
+    }
+
+    # Stage 10: the driver is resident.
+    send "kextstat | grep -qi bochs && echo BOCHS''_PRESENT || echo BOCHS''_ABSENT\r"
+    expect {
+        timeout { puts "\nFAIL: GFX-STAT timed out"; exit 1 }
+        "BOCHS_ABSENT"  { puts "\nFAIL: BochsGraphics loaded but absent from kextstat"; exit 1 }
+        "BOCHS_PRESENT" { puts "\nOK: GFX-STAT (bochs resident)" }
+    }
+
+    # Stage 11: it BOUND, and DRM published a device node. This is the real
+    # question -- the plan's canonical failure is "binds but black screen", and
+    # a missing card0 separates "never bound" from "bound but no KMS".
+    send "ls /dev/dri/card0 >/dev/null 2>&1 && echo CARD0''_YES || echo CARD0''_NO\r"
+    expect {
+        timeout { puts "\nFAIL: GFX-CARD0 timed out"; exit 1 }
+        "CARD0_YES" { puts "\nOK: GFX-CARD0 (/dev/dri/card0 exists -- KMS is up)" }
+        "CARD0_NO"  { puts "\nFAIL: GFX-CARD0 -- no /dev/dri/card0 (loaded but did not bind, or KMS init failed)" }
+    }
+
+    # Stage 12: diagnostics either way -- attach lines and any drm complaint.
+    send "dmesg | grep -iE 'bochs|drm|vgapci' | tail -20\r"
+    expect { timeout { } -re {[#%$] $} { } }
+    send "ls -l /dev/dri 2>&1 | head -5\r"
+    expect { timeout { } -re {[#%$] $} { } }
 }
 
 puts "\nKEXT-POC-OK: Nmdm load/stat/unload + IntelWiFi load/stat all passed"

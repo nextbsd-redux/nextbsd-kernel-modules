@@ -534,8 +534,8 @@ jobs:
   # the kextload/kextstat/kextunload trio (nextbsd Phase 1). Mirrors the
   # nextbsd-kernel boot smoke test. PR-only, never publishes.
   kext-smoke-test:
-    name: kext PoC (Nmdm.kext load/unload + IntelWiFi.kext load, in a booted VM)
-    needs: modules
+    name: kext PoC (Nmdm/IntelWiFi load + BochsGraphics bind, in a booted VM)
+    needs: [modules, drm-kmod]
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -553,6 +553,14 @@ jobs:
           large-packages: false
           docker-images: false
           swap-storage: false
+
+      # The graphics stack (drm core + TTM + the helpers + bochs) comes from the
+      # drm-kmod job, already wrapped and validated there.
+      - name: Download graphics kexts (amd64)
+        uses: actions/download-artifact@v4
+        with:
+          name: graphics-kexts-amd64
+          path: gfx-dl
 
       - name: Download built modules (amd64)
         uses: actions/download-artifact@v4
@@ -694,6 +702,22 @@ jobs:
             mount "/dev/$part" /mnt-root
             mkdir -p /mnt-root/System/Library/Extensions
             cp -R Nmdm.kext IntelWiFi.kext /mnt-root/System/Library/Extensions/
+            # Graphics stack: the whole OSBundleLibraries chain has to be
+            # present or BochsGraphics cannot resolve -- DMABuf <- IOGraphics
+            # <- TTM <- IOGraphicsExtras <- BochsGraphics.
+            GFXDIR=$(find gfx-dl -maxdepth 3 -name 'BochsGraphics.kext' -type d 2>/dev/null | head -1)
+            if [ -n "$GFXDIR" ]; then
+              GFXDIR=$(dirname "$GFXDIR")
+              for k in DMABuf IOGraphics TTM IOGraphicsExtras BochsGraphics; do
+                [ -d "$GFXDIR/$k.kext" ] || { echo "missing $k.kext in graphics artifact" >&2; exit 1; }
+                cp -R "$GFXDIR/$k.kext" /mnt-root/System/Library/Extensions/
+                chown -R root:wheel /mnt-root/System/Library/Extensions/$k.kext
+                chmod -R go-w /mnt-root/System/Library/Extensions/$k.kext
+              done
+              echo "==> graphics stack injected"
+            else
+              echo "==> no BochsGraphics.kext in artifact; graphics stages will be skipped"
+            fi
             # OSKext authenticates kexts: every bundle component must be
             # root:wheel and not group/other-writable (cp -R into the VM does
             # not guarantee this). This mirrors how kexts must be deployed.
@@ -714,6 +738,13 @@ jobs:
       - name: Boot test (kextload the converted kext)
         run: |
           chmod +x tests/kext-boot-test.sh
+          # Skip the graphics stages if the stack was not injected.
+          if [ -d "$GITHUB_WORKSPACE/gfx-dl" ] && find "$GITHUB_WORKSPACE/gfx-dl" -name BochsGraphics.kext -type d | grep -q .; then
+            export GFX_TEST=1
+          else
+            export GFX_TEST=0
+          fi
+          echo "GFX_TEST=$GFX_TEST"
           ./tests/kext-boot-test.sh disk.img
 
       - name: Upload kext boot log
