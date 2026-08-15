@@ -515,11 +515,21 @@ jobs:
           # fork PRs run this step (they get a read-only github.token, no secrets).
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Arch-scoped: `continuous` carries BOTH NextBSD-amd64-*.img.zip and
+          # NextBSD-arm64-*.img.zip since the arm64 lane was restored
+          # (nextbsd#407). A bare '*.img.zip' downloads two files, and then
+          # `unzip -Z1 iso/*.img.zip` globs to two paths -- unzip reads the first
+          # as the archive and the SECOND as a member filter inside it, matches
+          # nothing, and the step dies with "no .img member in published zip".
+          # This PoC boots qemu-system-x86_64, so it wants the amd64 image
+          # specifically; ZIP is the single-image invariant, not the release.
           gh release download continuous -R nextbsd-redux/nextbsd \
-            --pattern '*.img.zip' --dir iso --clobber
-          MEMBER=$(unzip -Z1 iso/*.img.zip | grep -E '\.img$' | head -1)
-          [ -n "$MEMBER" ] || { echo "no .img member in published zip" >&2; exit 1; }
-          unzip -p iso/*.img.zip "$MEMBER" > disk.img
+            --pattern 'NextBSD-amd64-*.img.zip' --dir iso --clobber
+          ZIP=$(ls iso/NextBSD-amd64-*.img.zip | head -1)
+          [ -n "$ZIP" ] || { echo "no amd64 .img.zip on the continuous release" >&2; exit 1; }
+          MEMBER=$(unzip -Z1 "$ZIP" | grep -E '\.img$' | head -1)
+          [ -n "$MEMBER" ] || { echo "no .img member in $ZIP" >&2; exit 1; }
+          unzip -p "$ZIP" "$MEMBER" > disk.img
           rm -rf iso
           ls -lh disk.img
 
