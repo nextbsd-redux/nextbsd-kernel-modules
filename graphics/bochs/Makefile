@@ -71,4 +71,10 @@ CFLAGS+= '-DKBUILD_MODNAME="${KMOD}"'
 CFLAGS+= '-DLINUXKPI_PARAM_PREFIX=bochs_' -DDRM_SYSCTL_PARAM_PREFIX=_${KMOD}
 CFLAGS+= ${KCONFIG:C/(.*)/-DCONFIG_\1/}
 
-CWARNFLAGS += -Wno-cast-qual
+# The same set every drm-kmod driver applies to vendored Linux sources
+# (i915/Makefile:386). Linux code does void-pointer arithmetic freely and uses
+# Linux' printk length modifiers, neither of which survives the kernel build's
+# -Werror: iteration 4 failed on -Wgnu-pointer-arith alone, and for the helpers
+# the offending code was inside FreeBSD's OWN linux/iosys-map.h rather than
+# anything vendored here.
+CWARNFLAGS += -Wno-pointer-arith -Wno-format -Wno-cast-qual
