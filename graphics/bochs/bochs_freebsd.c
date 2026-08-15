@@ -10,22 +10,15 @@
  * drm_simple_kms_helper and drm_gem_vram_helper live in that companion module
  * because drm-kmod omits both.
  */
-#include <sys/param.h>
-#include <sys/sysctl.h>
-
 #include <linux/module.h>
 
 /*
- * The Makefile passes -DDRM_SYSCTL_PARAM_PREFIX=_${KMOD}, which makes
- * linuxkpi's moduleparam.h hang this driver's tunables off hw.bochs. That
- * parent node has to exist or every LINUXKPI_PARAM_* expansion fails with
- * "use of undeclared identifier 'sysctl___hw_bochs'". Each drm-kmod driver
- * declares its own: i915_params.c has SYSCTL_NODE(_hw, .., i915kms), radeon
- * radeonkms, amdgpu amdgpu. bochs.c is vendored from Linux and has no
- * FreeBSD section to carry it, so it lives here.
+ * The hw.bochs sysctl node is declared in bochs.c, not here: linuxkpi's
+ * moduleparam.h expands the driver's tunables in whichever TU declares them,
+ * and bochs.c is the file with module_param_named(). Declaring it in both
+ * places is a duplicate symbol at link time (ld.lld: duplicate symbol
+ * sysctl___hw_bochs), which is exactly how iteration 6 failed.
  */
-SYSCTL_NODE(_hw, OID_AUTO, bochs, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
-    "bochs-drm parameters");
 
 MODULE_DEPEND(bochs, drmn, 2, 2, 2);
 MODULE_DEPEND(bochs, ttm, 1, 1, 1);
