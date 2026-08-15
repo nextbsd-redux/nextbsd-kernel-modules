@@ -291,6 +291,9 @@ jobs:
             TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
             buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod/drm_extra_helpers -j${NPROC} SYSDIR=/usr/src/sys" \
             2>&1 | tee /tmp/extra-helpers-build.log
+          # Stage next to the drm-kmod .ko's so the wrap step finds it (that
+          # step's collect ran before this one).
+          cp /tmp/drm-kmod/drm_extra_helpers/drm_extra_helpers.ko /tmp/ko-out/ 2>/dev/null || true
 
       - name: Summarize helper build gaps
         if: always()
@@ -331,6 +334,7 @@ jobs:
             TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
             buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod/bochs -j${NPROC} SYSDIR=/usr/src/sys" \
             2>&1 | tee /tmp/bochs-build.log
+          cp /tmp/drm-kmod/bochs/bochs.ko /tmp/ko-out/ 2>/dev/null || true
 
       - name: Summarize bochs build gaps
         if: always()
@@ -377,6 +381,14 @@ jobs:
           # WITH CONFIG_DRM_AMDGPU_SI/_CIK), so feed amdgpu's match words to -x.
           grep -oE '0x[0-9a-f]{8}' pers/AMDGraphics.iokitpersonalities | sort -u > pers/amdgpu-match.txt
           "$T/gen-radeon-personalities.sh" -x pers/amdgpu-match.txt "$DRMP" org.nextbsd.kext.radeongraphics RadeonGraphics > pers/RadeonGraphics.iokitpersonalities
+          # bochs (graphics kext series): ids come from the vendored driver's own
+          # bochs_pci_tbl[]. Skipped silently when the experimental build did not
+          # produce a .ko, so this step stays green while that is iterated.
+          if [ -f /tmp/ko-out/bochs.ko ]; then
+            chmod +x "$T/gen-bochs-personalities.sh"
+            "$T/gen-bochs-personalities.sh" /tmp/drm-kmod/drivers/gpu/drm/tiny/bochs.c \
+                org.nextbsd.kext.bochsgraphics BochsGraphics > pers/BochsGraphics.iokitpersonalities
+          fi
           echo "=== device-id counts ==="
           for f in pers/IntelGraphics AMDGraphics RadeonGraphics; do : ; done
           for f in pers/*.iokitpersonalities; do
@@ -407,6 +419,18 @@ jobs:
           "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.ttm \
                -p pers/RadeonGraphics.iokitpersonalities \
                "$KO/radeonkms.ko" RadeonGraphics org.nextbsd.kext.radeongraphics
+          # Graphics kext series: the shared helper module first (bochs depends
+          # on it), then bochs itself with its device-match personalities.
+          if [ -f "$KO/drm_extra_helpers.ko" ]; then
+            "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.ttm \
+                 "$KO/drm_extra_helpers.ko" IOGraphicsExtras org.nextbsd.kext.iographicsextras
+          fi
+          if [ -f "$KO/bochs.ko" ] && [ -f pers/BochsGraphics.iokitpersonalities ]; then
+            "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.ttm \
+                 -l org.nextbsd.kext.iographicsextras \
+                 -p pers/BochsGraphics.iokitpersonalities \
+                 "$KO/bochs.ko" BochsGraphics org.nextbsd.kext.bochsgraphics
+          fi
           echo "=== built kexts ==="
           for d in "$O"/*.kext; do echo "  $(basename "$d") ($(du -sh "$d" | cut -f1))"; done
 
