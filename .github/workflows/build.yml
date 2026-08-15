@@ -447,6 +447,21 @@ jobs:
             'AMDGraphics':    ('org.nextbsd.kext.amdgraphics', '1002', ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm','org.nextbsd.kext.dmabuf']),
             'RadeonGraphics': ('org.nextbsd.kext.radeongraphics', '1002', ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm']),
           }
+          import os
+          # Graphics kext series. Guarded on existence so the gate stays green
+          # while the experimental builds are iterated. IOGraphicsExtras carries
+          # no personalities (it is a library other drivers link against);
+          # BochsGraphics is checked below rather than through the `vendor`
+          # rule, because it matches TWO vendors -- 1234:1111 (qemu stdvga /
+          # bochs-display) and 4321:1111 (Simics) -- so no single vendor suffix
+          # describes its id list.
+          if os.path.exists('kexts/IOGraphicsExtras.kext'):
+              checks['IOGraphicsExtras'] = ('org.nextbsd.kext.iographicsextras', None,
+                                            ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm'])
+          if os.path.exists('kexts/BochsGraphics.kext'):
+              checks['BochsGraphics'] = ('org.nextbsd.kext.bochsgraphics', None,
+                                         ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm',
+                                          'org.nextbsd.kext.iographicsextras'])
           def load(n):
               return plistlib.load(open(f'kexts/{n}.kext/Contents/Info.plist','rb'))
           for name,(bid,vendor,deps) in checks.items():
@@ -464,6 +479,18 @@ jobs:
                   assert per['IOClass']==name, (name,per)
                   ids=per['IOPCIPrimaryMatch'].split()
                   assert ids and all(x.startswith('0x') and x.endswith(vendor) and len(x)==10 for x in ids), (name, ids[:3])
+
+          # bochs: explicit id set. The qemu stdvga match is the one every CI
+          # guest hits (q35's default -vga std IS stdvga), so assert it by name
+          # rather than by shape.
+          if 'BochsGraphics' in checks:
+              per = load('BochsGraphics')['IOKitPersonalities']['BochsGraphics']
+              assert per['IOProviderClass']=='IOPCIDevice', per
+              assert per['IOClass']=='BochsGraphics', per
+              ids = set(per['IOPCIPrimaryMatch'].split())
+              assert '0x11111234' in ids, ('BochsGraphics: qemu stdvga id missing', ids)
+              assert ids <= {'0x11111234','0x11114321'}, ('BochsGraphics: unexpected id', ids)
+              print('  BochsGraphics personalities OK:', sorted(ids))
                   print(f"{name}: OK — {len(ids)} {vendor} ids, deps {deps}")
               else:
                   print(f"{name}: OK — drm-core, deps {deps}")
