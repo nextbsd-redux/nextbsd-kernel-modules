@@ -780,7 +780,25 @@ static const struct pci_device_id bochs_pci_tbl[] = {
 };
 
 static struct pci_driver bochs_pci_driver = {
+#ifdef __linux__
 	.name =		"bochs-drm",
+#elif defined(__FreeBSD__)
+	/*
+	 * LinuxKPI routes registration by driver NAME:
+	 *
+	 *     pdrv->isdrm = strcmp(pdrv->name, "drmn") == 0;
+	 *     dc = pdrv->isdrm ? devclass_create("vgapci")
+	 *                      : devclass_find("pci");
+	 *
+	 * (sys/compat/linuxkpi/common/src/linux_pci.c). A DRM driver has to
+	 * attach under vgapci -- qemu's stdvga is vgapci0, the boot video
+	 * device -- so anything not called "drmn" registers on the plain pci
+	 * devclass and silently never matches: the module loads, sits
+	 * resident, and no probe is ever attempted. i915 and radeon both
+	 * carry this same override with the same comment.
+	 */
+	.name =		"drmn",	/* LinuxKPI expects this name to enable drm support */
+#endif
 	.id_table =	bochs_pci_tbl,
 	.probe =	bochs_pci_probe,
 	.remove =	bochs_pci_remove,
