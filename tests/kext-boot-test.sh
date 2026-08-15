@@ -154,7 +154,16 @@ if {$gfx_test} {
     expect { timeout {} -re {[#%$] $} {} }
     send "sysctl hw.iokit.catalogue 2>/dev/null | grep -ci bochs\r"
     expect { timeout {} -re {[#%$] $} {} }
-    send "ps -A 2>/dev/null | grep -c '[k]extd'\r"
+    # NB: no bare [..] in these send strings -- Tcl treats brackets as command
+    # substitution, which is how the previous revision died mid-stage.
+    send "pgrep -q kextd && echo KEXTD''_RUNNING || echo KEXTD''_GONE\r"
+    expect { timeout {} -re {[#%$] $} {} }
+    # kextd -v logs its startup push and every load request it serves; the
+    # kernel matcher logs its decisions under bootverbose. Between them these
+    # say whether a load request was ever sent, and whether kextd served it.
+    send "tail -25 /var/log/kextd.log 2>&1\r"
+    expect { timeout {} -re {[#%$] $} {} }
+    send "dmesg | grep -iE 'iocat|iokit|kextd' | tail -15\r"
     expect { timeout {} -re {[#%$] $} {} }
     send "ls /System/Library/Extensions | tr '\\n' ' '\r"
     expect { timeout {} -re {[#%$] $} {} }
