@@ -142,6 +142,22 @@ if {$gfx_test} {
         "ASTAT_YES" { puts "\nOK: GFX-AUTOLOAD-STAT -- bochs resident at boot" }
         "ASTAT_NO"  { puts "\nINFO: GFX-AUTOLOAD-STAT-NO -- bochs not loaded at boot" }
     }
+
+    # Localise a NO to one link in the chain:
+    #   personality pushed?  ->  matched?  ->  load requested?
+    # The in-kernel catalogue is userland-populated (kextd pushes personalities
+    # into it), and the matcher has a vgapci look-through for display-class
+    # devices (#64) -- so an empty catalogue means kextd never scanned, while a
+    # populated one that still did not bind points at the matcher or the load
+    # request instead.
+    send "sysctl hw.iokit.catalogue_count 2>&1 | tail -1\r"
+    expect { timeout {} -re {[#%$] $} {} }
+    send "sysctl hw.iokit.catalogue 2>/dev/null | grep -ci bochs\r"
+    expect { timeout {} -re {[#%$] $} {} }
+    send "ps -A 2>/dev/null | grep -c '[k]extd'\r"
+    expect { timeout {} -re {[#%$] $} {} }
+    send "ls /System/Library/Extensions | tr '\\n' ' '\r"
+    expect { timeout {} -re {[#%$] $} {} }
 }
 
 # Stage 3: kextload the bundle. Its ": loaded"/"already loaded" output cannot
