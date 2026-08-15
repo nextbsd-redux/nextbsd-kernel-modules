@@ -976,7 +976,19 @@ static int drm_vram_mm_init(struct drm_vram_mm *vmm, struct drm_device *dev,
 	vmm->vram_size = vram_size;
 
 	ret = ttm_device_init(&vmm->bdev, &bo_driver, dev->dev,
+#ifdef __linux__
 				 dev->anon_inode->i_mapping,
+#elif defined(__FreeBSD__)
+				 /*
+				  * drm-kmod's ttm_device_init takes a
+				  * `void *dummy' here instead of an
+				  * address_space: FreeBSD has no anon_inode,
+				  * so struct drm_device carries no such
+				  * member. radeon_ttm.c passes NULL the same
+				  * way.
+				  */
+				 NULL,
+#endif
 				 dev->vma_offset_manager,
 				 false, true);
 	if (ret)

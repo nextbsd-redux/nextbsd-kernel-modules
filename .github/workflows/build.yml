@@ -323,10 +323,6 @@ jobs:
           set -eu
           mkdir -p /tmp/drm-kmod/drivers/gpu/drm/tiny
           cp nbkm-tools/graphics/drivers/gpu/drm/tiny/*.c /tmp/drm-kmod/drivers/gpu/drm/tiny/
-          # video/vga.h: the one header neither drm-kmod nor linuxkpi provides
-          # (bochs.c's legacy VGA I/O-port blank path needs four constants).
-          mkdir -p /tmp/drm-kmod/include/video
-          cp nbkm-tools/graphics/include/video/vga.h /tmp/drm-kmod/include/video/
           cp -R nbkm-tools/graphics/bochs /tmp/drm-kmod/
           NPROC=$(nproc)
           cd /usr/src

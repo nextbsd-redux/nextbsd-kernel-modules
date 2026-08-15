@@ -27,7 +27,6 @@ driver is the helper layer, not the driver*.
                        the same convention drm-kmod uses for its own vendored
                        Linux sources
     include/drm/       their headers, verbatim
-    include/video/     vga.h shim (four constants; see the file)
     drm_extra_helpers/ FreeBSD module: Makefile + kld glue
 
 `drm_extra_helpers.ko` compiles the helpers **once** and exports them. Bundling
@@ -44,7 +43,9 @@ From the CI build log, not estimated:
 |---|---|
 | `pdev->resource[N].flags` | LinuxKPI's `struct pci_dev` has no `resource[]`; use `pci_resource_flags()`, which it does provide |
 | `request_region()` for the legacy VBE ioports | absent from LinuxKPI. That path only runs on devices with no MMIO BAR; qemu stdvga, `-device bochs-display` and Simics all have one, so the FreeBSD build refuses such a device rather than driving unclaimed ports |
-| `sysctl___hw_bochs` undeclared | `-DDRM_SYSCTL_PARAM_PREFIX=_bochs` needs a `SYSCTL_NODE(_hw, …, bochs)`; every drm-kmod driver declares its own, so bochs's lives in the glue file |
+| `sysctl___hw_bochs` undeclared | `-DDRM_SYSCTL_PARAM_PREFIX=_bochs` needs a `SYSCTL_NODE(_hw, …, bochs)` **in the same TU as the module params** — bochs.c has `module_param_named(modeset, …)`, so it goes there, not in the glue file |
+| `VGA_ATT_W` / `VGA_IS1_RC` / `VGA_MIS_COLOR` undeclared | FreeBSD's linuxkpi *does* ship `video/vga.h` (19 lines, `common/include/`), but only carries `VGA_MIS_W` of the four bochs needs. It wins the include search, so bochs.c supplements the missing three rather than shadowing it |
+| `drm_device` has no `anon_inode` (**the VRAM helper's only gap**) | drm-kmod's `ttm_device_init()` takes `void *dummy` where Linux takes `struct address_space *`; `radeon_ttm.c` passes `NULL`, and the helper now does the same |
 
 ## Status
 

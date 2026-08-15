@@ -19,6 +19,40 @@
 
 #include <video/vga.h>
 
+#ifdef __FreeBSD__
+#include <sys/param.h>
+#include <sys/sysctl.h>
+
+/*
+ * FreeBSD's linuxkpi ships a 19-line video/vga.h
+ * (sys/compat/linuxkpi/common/include/video/vga.h) carrying VGA_MIS_W,
+ * VGA_SEQ_*, VGA_MIS_R and the framebuffer constants -- but not these three,
+ * which bochs uses on its display-blank path. It wins the include search over
+ * anything we could add, so supplement rather than shadow it. Values are from
+ * Linux v6.12's include/video/vga.h, the tree this driver is vendored from.
+ */
+#ifndef VGA_ATT_W
+#define VGA_ATT_W	0x3C0	/* Attribute Controller Data Write Register */
+#endif
+#ifndef VGA_IS1_RC
+#define VGA_IS1_RC	0x3DA	/* Input Status Register 1 - color emulation */
+#endif
+#ifndef VGA_MIS_COLOR
+#define VGA_MIS_COLOR	0x01	/* Misc output: colour emulation addressing */
+#endif
+
+/*
+ * The Makefile passes -DDRM_SYSCTL_PARAM_PREFIX=_bochs, so linuxkpi's
+ * moduleparam.h hangs this driver's tunables off hw.bochs; that parent node
+ * must be declared in the SAME translation unit the parameters expand in.
+ * Each drm-kmod driver does this in its own source (i915_params.c,
+ * radeon_drv.c, amdgpu_drv.c) -- putting it in the companion glue file, as the
+ * previous iteration did, leaves this TU without it.
+ */
+SYSCTL_NODE(_hw, OID_AUTO, bochs, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "bochs-drm parameters");
+#endif /* __FreeBSD__ */
+
 /* ---------------------------------------------------------------------- */
 
 #define VBE_DISPI_IOPORT_INDEX           0x01CE
