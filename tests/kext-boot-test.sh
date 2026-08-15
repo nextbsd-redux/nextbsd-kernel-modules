@@ -130,43 +130,29 @@ expect {
 # finding about the matcher rather than a reason to fail the suite.
 # ---------------------------------------------------------------------------
 if {$gfx_test} {
-    send "ls /dev/dri/card0 >/dev/null 2>&1 && echo AUTO''_YES || echo AUTO''_NO\r"
-    expect {
-        timeout      { puts "\nWARN: AUTOLOAD check timed out" }
-        "AUTO_YES"   { puts "\nOK: GFX-AUTOLOAD -- card0 exists with no kextload: matcher+kextd bound it at boot" }
-        "AUTO_NO"    { puts "\nINFO: GFX-AUTOLOAD-NO -- not bound at boot; explicit load is tested below" }
+    # Autoload is ASYNCHRONOUS: the kernel matcher hands kextd a load request
+    # and kextd services it on its own schedule, so sampling once the moment a
+    # shell appears is a race -- the first revision of this stage reported NO
+    # while the guest's kextd.log showed the load happening moments later.
+    # Poll instead, and let the marker say how long it took.
+    set autoload_ok 0
+    for {set i 1} {$i <= 20} {incr i} {
+        send "ls /dev/dri/card0 >/dev/null 2>&1 && echo AUTO''_YES || echo AUTO''_NO\r"
+        expect {
+            timeout    { }
+            "AUTO_YES" { set autoload_ok 1 }
+            "AUTO_NO"  { }
+        }
+        if {$autoload_ok} break
+        sleep 3
     }
-    send "kextstat 2>/dev/null | grep -qi bochs && echo ASTAT''_YES || echo ASTAT''_NO\r"
-    expect {
-        timeout    { }
-        "ASTAT_YES" { puts "\nOK: GFX-AUTOLOAD-STAT -- bochs resident at boot" }
-        "ASTAT_NO"  { puts "\nINFO: GFX-AUTOLOAD-STAT-NO -- bochs not loaded at boot" }
+    if {$autoload_ok} {
+        puts "\nOK: GFX-AUTOLOAD -- card0 appeared with no kextload (match -> kextd -> bind), after [expr {$i * 3}]s"
+    } else {
+        puts "\nFAIL: GFX-AUTOLOAD -- no card0 within 60s of reaching a shell"
+        send "tail -15 /var/log/kextd.log 2>&1\r"
+        expect { timeout {} -re {[#%$] $} {} }
     }
-
-    # Localise a NO to one link in the chain:
-    #   personality pushed?  ->  matched?  ->  load requested?
-    # The in-kernel catalogue is userland-populated (kextd pushes personalities
-    # into it), and the matcher has a vgapci look-through for display-class
-    # devices (#64) -- so an empty catalogue means kextd never scanned, while a
-    # populated one that still did not bind points at the matcher or the load
-    # request instead.
-    send "sysctl hw.iokit.catalogue_count 2>&1 | tail -1\r"
-    expect { timeout {} -re {[#%$] $} {} }
-    send "sysctl hw.iokit.catalogue 2>/dev/null | grep -ci bochs\r"
-    expect { timeout {} -re {[#%$] $} {} }
-    # NB: no bare [..] in these send strings -- Tcl treats brackets as command
-    # substitution, which is how the previous revision died mid-stage.
-    send "pgrep -q kextd && echo KEXTD''_RUNNING || echo KEXTD''_GONE\r"
-    expect { timeout {} -re {[#%$] $} {} }
-    # kextd -v logs its startup push and every load request it serves; the
-    # kernel matcher logs its decisions under bootverbose. Between them these
-    # say whether a load request was ever sent, and whether kextd served it.
-    send "tail -25 /var/log/kextd.log 2>&1\r"
-    expect { timeout {} -re {[#%$] $} {} }
-    send "dmesg | grep -iE 'iocat|iokit|kextd' | tail -15\r"
-    expect { timeout {} -re {[#%$] $} {} }
-    send "ls /System/Library/Extensions | tr '\\n' ' '\r"
-    expect { timeout {} -re {[#%$] $} {} }
 }
 
 # Stage 3: kextload the bundle. Its ": loaded"/"already loaded" output cannot
