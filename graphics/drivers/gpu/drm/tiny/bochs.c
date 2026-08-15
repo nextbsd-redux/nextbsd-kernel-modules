@@ -701,6 +701,15 @@ static int bochs_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent
 	unsigned long fbsize;
 	int ret;
 
+#ifdef __FreeBSD__
+	/* The gate drm_pci_register_driver_if_modeset() applies on Linux; see
+	 * the registration macro at the bottom of this file for why it moved. */
+	if (bochs_modeset == 0)
+		return -ENODEV;
+	if (drm_firmware_drivers_only() && bochs_modeset == -1)
+		return -ENODEV;
+#endif
+
 	fbsize = pci_resource_len(pdev, 0);
 	if (fbsize < 4 * 1024 * 1024) {
 		DRM_ERROR("less than 4 MB video memory, ignoring device\n");
@@ -791,7 +800,24 @@ static struct pci_driver bochs_pci_driver = {
 /* ---------------------------------------------------------------------- */
 /* module init/exit                                                       */
 
+#ifdef __FreeBSD__
+/*
+ * drm_module_pci_driver_if_modeset() expands to
+ *     module_driver(drv, reg, unreg, __modeset)
+ * -- four arguments. Linux's module_driver() is variadic and swallows the
+ * extra one; FreeBSD's linuxkpi defines it with exactly three
+ * (sys/compat/linuxkpi/common/include/linux/device/driver.h:17), so the macro
+ * cannot expand here at all. Nothing in drm-kmod hits this because i915,
+ * amdgpu and radeon all register by hand.
+ *
+ * Register unconditionally with the three-argument form and enforce the
+ * modeset tunable in probe instead, which is what the _if_modeset wrapper
+ * does on Linux (see drm_pci_register_driver_if_modeset()).
+ */
+drm_module_pci_driver(bochs_pci_driver);
+#else
 drm_module_pci_driver_if_modeset(bochs_pci_driver, bochs_modeset);
+#endif
 
 MODULE_DEVICE_TABLE(pci, bochs_pci_tbl);
 MODULE_AUTHOR("Gerd Hoffmann <kraxel@redhat.com>");
