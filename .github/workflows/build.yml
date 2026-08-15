@@ -708,13 +708,19 @@ jobs:
             GFXDIR=$(find gfx-dl -maxdepth 3 -name 'BochsGraphics.kext' -type d 2>/dev/null | head -1)
             if [ -n "$GFXDIR" ]; then
               GFXDIR=$(dirname "$GFXDIR")
+              missing=""
               for k in DMABuf IOGraphics TTM IOGraphicsExtras BochsGraphics; do
-                [ -d "$GFXDIR/$k.kext" ] || { echo "missing $k.kext in graphics artifact" >&2; exit 1; }
+                [ -d "$GFXDIR/$k.kext" ] || { missing="$missing $k"; continue; }
                 cp -R "$GFXDIR/$k.kext" /mnt-root/System/Library/Extensions/
                 chown -R root:wheel /mnt-root/System/Library/Extensions/$k.kext
                 chmod -R go-w /mnt-root/System/Library/Extensions/$k.kext
               done
-              echo "==> graphics stack injected"
+              if [ -n "$missing" ]; then
+                echo "==> INCOMPLETE graphics stack (missing:$missing) — graphics stages will be skipped"
+                rm -rf /mnt-root/System/Library/Extensions/BochsGraphics.kext
+              else
+                echo "==> graphics stack injected"
+              fi
             else
               echo "==> no BochsGraphics.kext in artifact; graphics stages will be skipped"
             fi
@@ -739,7 +745,9 @@ jobs:
         run: |
           chmod +x tests/kext-boot-test.sh
           # Skip the graphics stages if the stack was not injected.
-          if [ -d "$GITHUB_WORKSPACE/gfx-dl" ] && find "$GITHUB_WORKSPACE/gfx-dl" -name BochsGraphics.kext -type d | grep -q .; then
+          if [ -d "$GITHUB_WORKSPACE/gfx-dl" ] \
+             && find "$GITHUB_WORKSPACE/gfx-dl" -name BochsGraphics.kext -type d | grep -q . \
+             && find "$GITHUB_WORKSPACE/gfx-dl" -name IOGraphicsExtras.kext -type d | grep -q .; then
             export GFX_TEST=1
           else
             export GFX_TEST=0

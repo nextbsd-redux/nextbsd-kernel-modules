@@ -467,6 +467,7 @@ static void __drm_gem_fb_end_cpu_access(struct drm_framebuffer *fb, enum dma_dat
 	}
 }
 
+#ifndef __FreeBSD__
 /**
  * drm_gem_fb_begin_cpu_access - prepares GEM buffer objects for CPU access
  * @fb: the framebuffer
@@ -509,7 +510,10 @@ err___drm_gem_fb_end_cpu_access:
 	return ret;
 }
 EXPORT_SYMBOL(drm_gem_fb_begin_cpu_access);
+#endif /* !__FreeBSD__ -- linuxkpi has no dma_buf_{begin,end}_cpu_access */
 
+
+#ifndef __FreeBSD__
 /**
  * drm_gem_fb_end_cpu_access - signals end of CPU access to GEM buffer objects
  * @fb: the framebuffer
@@ -526,6 +530,8 @@ void drm_gem_fb_end_cpu_access(struct drm_framebuffer *fb, enum dma_data_directi
 	__drm_gem_fb_end_cpu_access(fb, dir, fb->format->num_planes);
 }
 EXPORT_SYMBOL(drm_gem_fb_end_cpu_access);
+#endif /* !__FreeBSD__ -- linuxkpi has no dma_buf_{begin,end}_cpu_access */
+
 
 // TODO Drop this function and replace by drm_format_info_bpp() once all
 // DRM_FORMAT_* provide proper block info in drivers/gpu/drm/drm_fourcc.c
