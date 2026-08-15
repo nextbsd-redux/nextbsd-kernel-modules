@@ -22,8 +22,12 @@ driver is the helper layer, not the driver*.
 
 ## Layout
 
-    drivers/gpu/drm/   Linux v6.12 sources, vendored UNMODIFIED
-    include/drm/       their headers, likewise
+    drivers/gpu/drm/   Linux v6.12 sources; the helpers are verbatim, bochs.c
+                       carries FreeBSD deltas in #ifdef __FreeBSD__ blocks --
+                       the same convention drm-kmod uses for its own vendored
+                       Linux sources
+    include/drm/       their headers, verbatim
+    include/video/     vga.h shim (four constants; see the file)
     drm_extra_helpers/ FreeBSD module: Makefile + kld glue
 
 `drm_extra_helpers.ko` compiles the helpers **once** and exports them. Bundling
@@ -31,6 +35,16 @@ them per-driver would make two drivers collide on `EXPORT_SYMS`, which is why
 the plan calls for a shared module.
 
 Sources are GPL-2.0-or-later, as is the rest of the vendored Linux DRM code.
+
+## Measured linuxkpi gaps (bochs)
+
+From the CI build log, not estimated:
+
+| gap | resolution |
+|---|---|
+| `pdev->resource[N].flags` | LinuxKPI's `struct pci_dev` has no `resource[]`; use `pci_resource_flags()`, which it does provide |
+| `request_region()` for the legacy VBE ioports | absent from LinuxKPI. That path only runs on devices with no MMIO BAR; qemu stdvga, `-device bochs-display` and Simics all have one, so the FreeBSD build refuses such a device rather than driving unclaimed ports |
+| `sysctl___hw_bochs` undeclared | `-DDRM_SYSCTL_PARAM_PREFIX=_bochs` needs a `SYSCTL_NODE(_hw, …, bochs)`; every drm-kmod driver declares its own, so bochs's lives in the glue file |
 
 ## Status
 

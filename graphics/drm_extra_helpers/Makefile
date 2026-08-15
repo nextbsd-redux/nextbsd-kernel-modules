@@ -61,7 +61,12 @@ CFLAGS+= -I${SYSDIR}/compat/linuxkpi/dummy/include
 CFLAGS+= -I${.CURDIR:H}/include
 CFLAGS+= -I${.CURDIR:H}/include/drm
 CFLAGS+= -I${.CURDIR:H}/include/uapi
-CFLAGS+= -I${SRCDIR:H:H} -I${SRCDIR}
+# drivers/gpu must be on the path: drm-kmod's own headers include
+# <drm/drm_os_freebsd.h>, which lives at drivers/gpu/drm/. Spelled from the
+# drm-kmod root rather than ${SRCDIR:H:H} -- SRCDIR sits at a different depth
+# per module (drivers/gpu/drm vs drivers/gpu/drm/tiny), and the i915-derived
+# :H:H landed on drivers/ for the helpers, which is how iteration 2 failed.
+CFLAGS+= -I${.CURDIR:H}/drivers/gpu -I${SRCDIR}
 
 CFLAGS+= '-DKBUILD_MODNAME="${KMOD}"'
 CFLAGS+= '-DLINUXKPI_PARAM_PREFIX=drm_extra_helpers_' -DDRM_SYSCTL_PARAM_PREFIX=_${KMOD}

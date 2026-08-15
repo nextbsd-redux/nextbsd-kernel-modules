@@ -215,7 +215,13 @@ static int bochs_hw_init(struct drm_device *dev)
 	unsigned long addr, size, mem, ioaddr, iosize;
 	u16 id;
 
+#ifdef __FreeBSD__
+	/* LinuxKPI's struct pci_dev carries no resource[] array; the accessor
+	 * pci_resource_flags() is the supported way to ask a BAR's type. */
+	if (pci_resource_flags(pdev, 2) & IORESOURCE_MEM) {
+#else
 	if (pdev->resource[2].flags & IORESOURCE_MEM) {
+#endif
 		/* mmio bar with vga and bochs registers present */
 		if (pci_request_region(pdev, 2, "bochs-drm") != 0) {
 			DRM_ERROR("Cannot request mmio region\n");
@@ -229,6 +235,21 @@ static int bochs_hw_init(struct drm_device *dev)
 			return -ENOMEM;
 		}
 	} else {
+#ifdef __FreeBSD__
+		/*
+		 * Legacy VBE-DISPI I/O-port path, for devices that expose the
+		 * bochs registers through ports 0x1CE/0x1CF instead of an MMIO
+		 * BAR. LinuxKPI provides no request_region(), and every device
+		 * NextBSD targets has the MMIO BAR: qemu's stdvga (the default
+		 * -vga std, PCI 1234:1111) and the discrete -device
+		 * bochs-display both expose it, as does Simics. Refuse the
+		 * device rather than silently driving ports we never claimed;
+		 * if a real ioport-only Bochs device ever matters, this wants a
+		 * bus_alloc_resource(SYS_RES_IOPORT) shim, not a stub.
+		 */
+		DRM_ERROR("no MMIO BAR; legacy VBE ioport path unsupported\n");
+		return -ENODEV;
+#else
 		ioaddr = VBE_DISPI_IOPORT_INDEX;
 		iosize = 2;
 		if (!request_region(ioaddr, iosize, "bochs-drm")) {
@@ -236,6 +257,7 @@ static int bochs_hw_init(struct drm_device *dev)
 			return -EBUSY;
 		}
 		bochs->ioports = 1;
+#endif
 	}
 
 	id = bochs_dispi_read(bochs, VBE_DISPI_INDEX_ID);
@@ -246,7 +268,11 @@ static int bochs_hw_init(struct drm_device *dev)
 		return -ENODEV;
 	}
 
+#ifdef __FreeBSD__
+	if ((pci_resource_flags(pdev, 0) & IORESOURCE_MEM) == 0)
+#else
 	if ((pdev->resource[0].flags & IORESOURCE_MEM) == 0)
+#endif
 		return -ENODEV;
 	addr = pci_resource_start(pdev, 0);
 	size = pci_resource_len(pdev, 0);
@@ -299,7 +325,9 @@ static void bochs_hw_fini(struct drm_device *dev)
 	if (bochs->mmio)
 		iounmap(bochs->mmio);
 	if (bochs->ioports)
+#ifndef __FreeBSD__
 		release_region(VBE_DISPI_IOPORT_INDEX, 2);
+#endif
 	if (bochs->fb_map)
 		iounmap(bochs->fb_map);
 	pci_release_regions(to_pci_dev(dev->dev));
