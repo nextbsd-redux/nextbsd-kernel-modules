@@ -116,6 +116,34 @@ expect {
     -re {[#%$] $}     { puts "\nOK: at root shell prompt" }
 }
 
+# ---------------------------------------------------------------------------
+# Stage 2b: AUTOLOAD. The graphics kexts were injected into
+# /System/Library/Extensions before boot, so if the in-kernel IOKit matcher
+# and kextd do their job, BochsGraphics should already be bound to the qemu
+# stdvga (1234:1111) by the time we reach a shell -- with nobody having run
+# kextload. That is the user-facing story the whole kext architecture rests
+# on, and it is distinct from the explicit-load proof in the GFX stages
+# below (which would pass even if autoload were broken).
+#
+# Reported, not gated, on purpose: this is the first time anything has
+# exercised match -> kextd -> load without a human, and a NO here is a real
+# finding about the matcher rather than a reason to fail the suite.
+# ---------------------------------------------------------------------------
+if {$gfx_test} {
+    send "ls /dev/dri/card0 >/dev/null 2>&1 && echo AUTO''_YES || echo AUTO''_NO\r"
+    expect {
+        timeout      { puts "\nWARN: AUTOLOAD check timed out" }
+        "AUTO_YES"   { puts "\nOK: GFX-AUTOLOAD -- card0 exists with no kextload: matcher+kextd bound it at boot" }
+        "AUTO_NO"    { puts "\nINFO: GFX-AUTOLOAD-NO -- not bound at boot; explicit load is tested below" }
+    }
+    send "kextstat 2>/dev/null | grep -qi bochs && echo ASTAT''_YES || echo ASTAT''_NO\r"
+    expect {
+        timeout    { }
+        "ASTAT_YES" { puts "\nOK: GFX-AUTOLOAD-STAT -- bochs resident at boot" }
+        "ASTAT_NO"  { puts "\nINFO: GFX-AUTOLOAD-STAT-NO -- bochs not loaded at boot" }
+    }
+}
+
 # Stage 3: kextload the bundle. Its ": loaded"/"already loaded" output cannot
 # appear in the echoed command line, so matching it is race-free.
 send "kextload $kext\r"
