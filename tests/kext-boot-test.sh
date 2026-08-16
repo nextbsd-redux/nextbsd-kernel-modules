@@ -259,8 +259,60 @@ if {$gfx_test} {
         "CARD0_NO"  { puts "\nFAIL: GFX-CARD0 -- no /dev/dri/card0 (loaded but did not bind, or KMS init failed)" }
     }
 
+    # Stage 11b: VBoxGraphics loads. It cannot BIND here -- qemu emulates no
+    # VirtualBox GPU, so 80ee:beef is absent and no probe will ever fire -- but
+    # loading is the assertion that actually matters for a fresh port: the
+    # failure that killed the first bochs iterations was kldload ENOEXEC from
+    # missing module metadata, and an unresolved symbol against the helper
+    # module would surface here too. Attach is proven on a VirtualBox guest,
+    # not in CI. Skipped silently when the kext is absent, so the gate stays
+    # green while the vboxvideo build is iterated.
+    send "test -d /System/Library/Extensions/VBoxGraphics.kext && echo VBOX''_KEXT_YES || echo VBOX''_KEXT_NO\r"
+    set vbox_present 0
+    expect {
+        timeout { puts "\nWARN: VBOX-PRESENT probe timed out" }
+        "VBOX_KEXT_YES" { set vbox_present 1 }
+        "VBOX_KEXT_NO"  { puts "\nSKIP: VBoxGraphics.kext not in this image" }
+    }
+    if {$vbox_present} {
+        send "kextload /System/Library/Extensions/VBoxGraphics.kext\r"
+        expect {
+            timeout { puts "\nFAIL: VBOX-LOAD timed out"; exit 1 }
+            "kextload: loaded" { puts "\nOK: VBOX-LOAD VBoxGraphics" }
+            "already loaded"   { puts "\nOK: VBOX-LOAD VBoxGraphics (already loaded)" }
+            -re {kldload\([^\n]*\n} {
+                puts "\nFAIL: VBOX-LOAD errored: $expect_out(0,string)"
+                send "kldstat\r"; expect { timeout {} -re {[#%$] $} {} }
+                send "dmesg | tail -25\r"; expect { timeout {} -re {[#%$] $} {} }
+                exit 1
+            }
+            -re "not a bundle" { puts "\nFAIL: VBOX-LOAD VBoxGraphics is not a readable bundle"; exit 1 }
+        }
+        # Match on the BUNDLE name, not the kld module name. kldstat lists the
+        # loaded file, which for a kext is the bundle binary
+        # (VBoxGraphics.kext/Contents/MacOS/VBoxGraphics) -- so "VBoxGraphics"
+        # appears and "vboxvideo", the KMOD name inside it, never does. The
+        # bochs stage above only passes because `grep -i bochs` happens to
+        # match "BochsGraphics"; grepping for vboxvideo here found nothing and
+        # reported a resident module as missing. Both spellings are accepted so
+        # this keeps working if kextstat ever reports the module name instead.
+        send "kextstat | grep -iE 'vboxgraphics|vboxvideo'\r"
+        expect { timeout { } -re {[#%$] $} { } }
+        send "kextstat | grep -qiE 'vboxgraphics|vboxvideo' && echo VBOX''_PRESENT || echo VBOX''_ABSENT\r"
+        expect {
+            timeout { puts "\nFAIL: VBOX-STAT timed out"; exit 1 }
+            "VBOX_ABSENT"  {
+                puts "\nFAIL: VBoxGraphics loaded but absent from kextstat"
+                send "kextstat\r"; expect { timeout {} -re {[#%$] $} {} }
+                send "kldstat\r"; expect { timeout {} -re {[#%$] $} {} }
+                exit 1
+            }
+            "VBOX_PRESENT" { puts "\nOK: VBOX-STAT (vboxvideo resident; no bind expected in qemu)" }
+        }
+    }
+
     # Stage 12: diagnostics either way -- attach lines and any drm complaint.
-    send "dmesg | grep -iE 'bochs|drm|vgapci' | tail -20\r"
+    send "dmesg | grep -iE 'bochs|vboxvideo|drm|vgapci' | tail -20\r"
     expect { timeout { } -re {[#%$] $} { } }
     send "ls -l /dev/dri 2>&1 | head -5\r"
     expect { timeout { } -re {[#%$] $} { } }

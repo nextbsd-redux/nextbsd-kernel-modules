@@ -8,6 +8,30 @@
 #
 #   drm_simple_kms_helper.c   pure drm-core, low risk         (bochs)
 #   drm_gem_vram_helper.c     TTM-coupled VRAM GEM, the gate  (bochs, vboxvideo)
+#   drm_gem_atomic_helper.c   shadow-buffered planes          (vboxvideo)
+#
+# The shadow-plane layer was added for vboxvideo, whose cursor plane is built
+# on DRM_GEM_SHADOW_PLANE_FUNCS. drm-kmod's include/drm/drm_gem_atomic_helper.h
+# is a 15-line stub declaring only drm_gem_plane_helper_prepare_fb(), so the
+# whole shadow API -- struct drm_shadow_plane_state, begin/end_shadow_fb_access,
+# the FUNCS macros -- is missing. The vendored .c excludes that ONE function
+# (drm.ko already exports it) and keeps everything after it. Every small driver
+# after this one -- ast, mgag200, virtio-gpu -- uses shadow planes too, which is
+# exactly why it belongs here rather than inside vboxvideo.
+#
+#   drm_format_helper.c       format conversion + conv_state  (shadow planes)
+#
+# drm_format_helper.c is NOT vendored: drm-kmod already carries a FreeBSD-adapted
+# copy at drivers/gpu/drm/, which .PATH picks up. It is listed here because
+# drm-kmod compiles it into NOTHING -- the file sits in the tree with its
+# EXPORT_SYMBOLs intact, but no Makefile in that repo (drm, i915, amd, radeon)
+# names it, so drm_format_conv_state_{init,copy,release} exist in source and in
+# no .ko. struct drm_shadow_plane_state embeds a drm_format_conv_state and the
+# shadow duplicate/reset/destroy paths call all three, so without this line
+# drm_extra_helpers.ko builds clean and then fails kldload with ENOEXEC on three
+# undefined symbols -- which is exactly how the first attempt at this failed.
+# Verified against the built kexts that nothing else defines them, so there is
+# no duplicate-symbol risk in claiming them here.
 #
 # Sources are vendored UNMODIFIED from Linux v6.12, matching drm-kmod's 6.12-lts.
 #
@@ -30,6 +54,8 @@ SRCS=	\
 	drm_simple_kms_helper.c \
 	drm_gem_vram_helper.c \
 	drm_gem_framebuffer_helper.c \
+	drm_gem_atomic_helper.c \
+	drm_format_helper.c \
 	drm_extra_helpers_freebsd.c
 
 SRCS	+=			\
