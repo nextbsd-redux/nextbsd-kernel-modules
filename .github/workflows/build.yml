@@ -810,6 +810,20 @@ jobs:
                 chown -R root:wheel /mnt-root/System/Library/Extensions/$k.kext
                 chmod -R go-w /mnt-root/System/Library/Extensions/$k.kext
               done
+              # VBoxGraphics is injected separately and is OPTIONAL: it shares
+              # the whole dependency chain above but cannot bind here (qemu
+              # emulates no 80ee:beef), so its stage only asserts kldload +
+              # kextstat. Keeping it out of the required list means a skipped
+              # or failed vboxvideo build costs the VBOX stage and nothing
+              # else, rather than taking the proven bochs path down with it.
+              if [ -d "$GFXDIR/VBoxGraphics.kext" ]; then
+                cp -R "$GFXDIR/VBoxGraphics.kext" /mnt-root/System/Library/Extensions/
+                chown -R root:wheel /mnt-root/System/Library/Extensions/VBoxGraphics.kext
+                chmod -R go-w /mnt-root/System/Library/Extensions/VBoxGraphics.kext
+                echo "==> VBoxGraphics.kext injected"
+              else
+                echo "==> VBoxGraphics.kext absent — VBOX stages will be skipped"
+              fi
               if [ -n "$missing" ]; then
                 echo "==> INCOMPLETE graphics stack (missing:$missing) — graphics stages will be skipped"
                 rm -rf /mnt-root/System/Library/Extensions/BochsGraphics.kext
