@@ -56,7 +56,11 @@ echo "==> using UEFI firmware: $OVMF"
 
 KEXT_PATH=/System/Library/Extensions/Nmdm.kext
 IWIFI_PATH=/System/Library/Extensions/IntelWiFi.kext
-export ACCEL_FLAGS OVMF KEXT_PATH IWIFI_PATH
+# Graphics stack (nextbsd-kernel-modules#30). GFX_TEST=0 skips those stages, so
+# the PoC still runs on images/branches without the graphics kexts injected.
+GFX_TEST=${GFX_TEST:-1}
+BOCHS_PATH=/System/Library/Extensions/BochsGraphics.kext
+export ACCEL_FLAGS OVMF KEXT_PATH IWIFI_PATH GFX_TEST BOCHS_PATH
 
 cat > "$EXP" <<'EOF'
 set timeout 480
@@ -67,6 +71,8 @@ set img [lindex $argv 0]
 set accel_flags [split $env(ACCEL_FLAGS) " "]
 set kext $env(KEXT_PATH)
 set iwifi $env(IWIFI_PATH)
+set gfx_test $env(GFX_TEST)
+set bochs $env(BOCHS_PATH)
 
 eval spawn qemu-system-x86_64 \
     -m 4G \
@@ -108,6 +114,45 @@ expect {
     "Password:"       { send "\r"; exp_continue }
     "Login incorrect" { puts "\nFAIL: root login rejected"; exit 1 }
     -re {[#%$] $}     { puts "\nOK: at root shell prompt" }
+}
+
+# ---------------------------------------------------------------------------
+# Stage 2b: AUTOLOAD. The graphics kexts were injected into
+# /System/Library/Extensions before boot, so if the in-kernel IOKit matcher
+# and kextd do their job, BochsGraphics should already be bound to the qemu
+# stdvga (1234:1111) by the time we reach a shell -- with nobody having run
+# kextload. That is the user-facing story the whole kext architecture rests
+# on, and it is distinct from the explicit-load proof in the GFX stages
+# below (which would pass even if autoload were broken).
+#
+# Reported, not gated, on purpose: this is the first time anything has
+# exercised match -> kextd -> load without a human, and a NO here is a real
+# finding about the matcher rather than a reason to fail the suite.
+# ---------------------------------------------------------------------------
+if {$gfx_test} {
+    # Autoload is ASYNCHRONOUS: the kernel matcher hands kextd a load request
+    # and kextd services it on its own schedule, so sampling once the moment a
+    # shell appears is a race -- the first revision of this stage reported NO
+    # while the guest's kextd.log showed the load happening moments later.
+    # Poll instead, and let the marker say how long it took.
+    set autoload_ok 0
+    for {set i 1} {$i <= 20} {incr i} {
+        send "ls /dev/dri/card0 >/dev/null 2>&1 && echo AUTO''_YES || echo AUTO''_NO\r"
+        expect {
+            timeout    { }
+            "AUTO_YES" { set autoload_ok 1 }
+            "AUTO_NO"  { }
+        }
+        if {$autoload_ok} break
+        sleep 3
+    }
+    if {$autoload_ok} {
+        puts "\nOK: GFX-AUTOLOAD -- card0 appeared with no kextload (match -> kextd -> bind), after [expr {$i * 3}]s"
+    } else {
+        puts "\nFAIL: GFX-AUTOLOAD -- no card0 within 60s of reaching a shell"
+        send "tail -15 /var/log/kextd.log 2>&1\r"
+        expect { timeout {} -re {[#%$] $} {} }
+    }
 }
 
 # Stage 3: kextload the bundle. Its ": loaded"/"already loaded" output cannot
@@ -165,6 +210,60 @@ expect {
     timeout { puts "\nFAIL: INTELWIFI-STAT timed out"; exit 1 }
     "IWIFI_ABSENT"  { puts "\nFAIL: IntelWiFi loaded but not visible in kextstat"; exit 1 }
     "IWIFI_PRESENT" { puts "\nOK: INTELWIFI-STAT (driver visible via kldstat)" }
+}
+
+# ---------------------------------------------------------------------------
+# Stages 9-12: the graphics stack. Unlike IntelWiFi (which loads but never
+# binds, since qemu emulates no Intel WiFi), bochs SHOULD bind here: q35's
+# default -vga std IS the Bochs/stdvga device, PCI 1234:1111, which is exactly
+# what BochsGraphics.kext's IOPCIPrimaryMatch names. So this is the first test
+# in the tree that can prove match -> load -> bind -> KMS, not just load.
+#
+# Loaded explicitly in dependency order rather than relying on kextload to walk
+# OSBundleLibraries, so a failure names the layer that broke.
+# ---------------------------------------------------------------------------
+if {$gfx_test} {
+    foreach k {DMABuf IOGraphics TTM IOGraphicsExtras BochsGraphics} {
+        send "kextload /System/Library/Extensions/$k.kext\r"
+        expect {
+            timeout { puts "\nFAIL: GFX-LOAD $k timed out"; exit 1 }
+            "kextload: loaded" { puts "\nOK: GFX-LOAD $k" }
+            "already loaded"   { puts "\nOK: GFX-LOAD $k (already loaded)" }
+            -re {kldload\([^\n]*\n} {
+                puts "\nFAIL: GFX-LOAD $k errored: $expect_out(0,string)"
+                # Dump why before bailing: a bare ENOEXEC says nothing, and a
+                # second CI cycle to learn it costs 20 minutes.
+                send "kldstat\r"; expect { timeout {} -re {[#%$] $} {} }
+                send "dmesg | tail -25\r"; expect { timeout {} -re {[#%$] $} {} }
+                exit 1
+            }
+            -re "not a bundle" { puts "\nFAIL: GFX-LOAD $k is not a readable bundle"; exit 1 }
+        }
+    }
+
+    # Stage 10: the driver is resident.
+    send "kextstat | grep -qi bochs && echo BOCHS''_PRESENT || echo BOCHS''_ABSENT\r"
+    expect {
+        timeout { puts "\nFAIL: GFX-STAT timed out"; exit 1 }
+        "BOCHS_ABSENT"  { puts "\nFAIL: BochsGraphics loaded but absent from kextstat"; exit 1 }
+        "BOCHS_PRESENT" { puts "\nOK: GFX-STAT (bochs resident)" }
+    }
+
+    # Stage 11: it BOUND, and DRM published a device node. This is the real
+    # question -- the plan's canonical failure is "binds but black screen", and
+    # a missing card0 separates "never bound" from "bound but no KMS".
+    send "ls /dev/dri/card0 >/dev/null 2>&1 && echo CARD0''_YES || echo CARD0''_NO\r"
+    expect {
+        timeout { puts "\nFAIL: GFX-CARD0 timed out"; exit 1 }
+        "CARD0_YES" { puts "\nOK: GFX-CARD0 (/dev/dri/card0 exists -- KMS is up)" }
+        "CARD0_NO"  { puts "\nFAIL: GFX-CARD0 -- no /dev/dri/card0 (loaded but did not bind, or KMS init failed)" }
+    }
+
+    # Stage 12: diagnostics either way -- attach lines and any drm complaint.
+    send "dmesg | grep -iE 'bochs|drm|vgapci' | tail -20\r"
+    expect { timeout { } -re {[#%$] $} { } }
+    send "ls -l /dev/dri 2>&1 | head -5\r"
+    expect { timeout { } -re {[#%$] $} { } }
 }
 
 puts "\nKEXT-POC-OK: Nmdm load/stat/unload + IntelWiFi load/stat all passed"
