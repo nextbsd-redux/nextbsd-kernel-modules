@@ -179,10 +179,25 @@ jobs:
   # job — does NOT gate publish (publish needs: modules), so it can be iterated
   # freely while we settle the cross-build.
   drm-kmod:
-    name: drm-kmod build (drm/i915/amdgpu/radeon, amd64)
+    name: drm-kmod build (${{ matrix.target }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: amd64
+            target_arch: amd64
+          # arm64: drm-kmod's own Makefile lists aarch64 in SUPPORTED_ARCH and
+          # kconfig.mk has an explicit aarch64 branch, so the source tree
+          # supports it -- but the FreeBSD PORT is deliberately narrower
+          # (ONLY_FOR_ARCHS = amd64 powerpc64 powerpc64le), so nobody ships
+          # this combination and it is genuinely unmeasured. That is what this
+          # leg is for. fail-fast is off so an arm64 failure cannot take the
+          # proven amd64 leg down with it.
+          - target: arm64
+            target_arch: aarch64
     container:
-      image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:amd64-${{ (github.event.client_payload.fbsd_sha || inputs.fbsd_sha) && format('fbsd-{0}', github.event.client_payload.fbsd_sha || inputs.fbsd_sha) || 'latest' }}
+      image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:${{ matrix.target }}-${{ (github.event.client_payload.fbsd_sha || inputs.fbsd_sha) && format('fbsd-{0}', github.event.client_payload.fbsd_sha || inputs.fbsd_sha) || 'latest' }}
     steps:
       - name: Download kernel obj tree from kernel continuous release
         env:
@@ -194,7 +209,7 @@ jobs:
           mkdir -p /usr/obj
           gh release download continuous \
             --repo nextbsd-redux/nextbsd-kernel \
-            --pattern "kernel-obj-amd64.tar.gz" \
+            --pattern "kernel-obj-${{ matrix.target }}.tar.gz" \
             --output /tmp/kernel-obj.tar.gz --clobber
           tar -C /usr/obj -xzf /tmp/kernel-obj.tar.gz
 
@@ -208,7 +223,7 @@ jobs:
             echo "Applying $p"
             git apply /tmp/nk/patches/$p
           done
-          cp /tmp/nk/config/NEXTBSD /usr/src/sys/amd64/conf/
+          cp /tmp/nk/config/NEXTBSD /usr/src/sys/${{ matrix.target }}/conf/
 
       - name: Build drm-kmod (6.12-lts) against the kernel obj
         run: |
@@ -218,7 +233,7 @@ jobs:
           cd /usr/src
           ./tools/build/make.py \
             --cross-bindir="${CROSS_BINDIR}" \
-            TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
+            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=NEXTBSD \
             buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod -j${NPROC} SYSDIR=/usr/src/sys"
 
       - name: Collect + list drm-kmod .ko output
@@ -233,16 +248,27 @@ jobs:
           for ko in drm i915kms amdgpu radeonkms ttm; do
             if [ -f "/tmp/ko-out/${ko}.ko" ]; then echo "  OK   ${ko}.ko"; else echo "  MISS ${ko}.ko"; fi
           done
-          # drm.ko + the three drivers are the must-haves; ttm may be folded into drm.
-          for ko in drm i915kms amdgpu radeonkms; do
+          # drm.ko + the GPU drivers are the must-haves; ttm may be folded into drm.
+          #
+          # i915 is required on amd64 and MUST NOT be expected on arm64: drm-kmod's
+          # top-level Makefile adds it to DEFAULT_KMODS only for amd64/i386
+          # (there is no Intel iGPU on aarch64), so its absence there is correct
+          # rather than a build failure. amdgpu and radeonkms ARE expected on both:
+          # discrete AMD cards in an arm64 machine's PCIe slot are a real
+          # configuration, and drm-kmod builds them for aarch64 by default.
+          REQUIRED="drm amdgpu radeonkms"
+          if [ "${{ matrix.target }}" = "amd64" ]; then
+            REQUIRED="$REQUIRED i915kms"
+          fi
+          for ko in $REQUIRED; do
             test -f "/tmp/ko-out/${ko}.ko" || { echo "FAIL: required ${ko}.ko not built" >&2; exit 1; }
           done
-          echo "drm-kmod built drm + i915kms + amdgpu + radeonkms"
+          echo "drm-kmod (${{ matrix.target }}) built: $REQUIRED"
 
       - name: Upload drm-kmod modules artifact
         uses: actions/upload-artifact@v4
         with:
-          name: drm-kmod-modules-amd64
+          name: drm-kmod-modules-${{ matrix.target }}
           path: /tmp/ko-out/*.ko
           if-no-files-found: warn
 
@@ -288,7 +314,7 @@ jobs:
           cd /usr/src
           ./tools/build/make.py \
             --cross-bindir="${CROSS_BINDIR}" \
-            TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
+            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=NEXTBSD \
             buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod/drm_extra_helpers -j${NPROC} SYSDIR=/usr/src/sys" \
             2>&1 | tee /tmp/extra-helpers-build.log
           # Stage next to the drm-kmod .ko's so the wrap step finds it (that
@@ -321,6 +347,7 @@ jobs:
       # above fails, because the two failure sets are what we are here to
       # measure and serializing them wastes a CI cycle.
       - name: Build bochs.ko (vendored Linux 6.12 tiny/bochs.c)
+        if: matrix.target == 'amd64'
         continue-on-error: true
         run: |
           set -eu
@@ -331,13 +358,13 @@ jobs:
           cd /usr/src
           ./tools/build/make.py \
             --cross-bindir="${CROSS_BINDIR}" \
-            TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
+            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=NEXTBSD \
             buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod/bochs -j${NPROC} SYSDIR=/usr/src/sys" \
             2>&1 | tee /tmp/bochs-build.log
           cp /tmp/drm-kmod/bochs/bochs.ko /tmp/ko-out/ 2>/dev/null || true
 
       - name: Summarize bochs build gaps
-        if: always()
+        if: always() && matrix.target == 'amd64'
         run: |
           if [ -f /tmp/drm-kmod/bochs/bochs.ko ]; then
             echo "BOCHS-OK: bochs.ko built"; ls -lh /tmp/drm-kmod/bochs/bochs.ko; exit 0
@@ -365,6 +392,7 @@ jobs:
       # guest status codes; a uapi header on Linux, hence the <linux/...>
       # spelling the -I../include/uapi path reproduces).
       - name: Build vboxvideo.ko (vendored Linux 6.12 vboxvideo/ + lib/genalloc.c)
+        if: matrix.target == 'amd64'
         continue-on-error: true
         run: |
           set -eu
@@ -379,13 +407,13 @@ jobs:
           cd /usr/src
           ./tools/build/make.py \
             --cross-bindir="${CROSS_BINDIR}" \
-            TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
+            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=NEXTBSD \
             buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod/vboxvideo -j${NPROC} SYSDIR=/usr/src/sys" \
             2>&1 | tee /tmp/vboxvideo-build.log
           cp /tmp/drm-kmod/vboxvideo/vboxvideo.ko /tmp/ko-out/ 2>/dev/null || true
 
       - name: Summarize vboxvideo build gaps
-        if: always()
+        if: always() && matrix.target == 'amd64'
         run: |
           if [ -f /tmp/drm-kmod/vboxvideo/vboxvideo.ko ]; then
             echo "VBOX-OK: vboxvideo.ko built"; ls -lh /tmp/drm-kmod/vboxvideo/vboxvideo.ko; exit 0
@@ -416,18 +444,24 @@ jobs:
           I915C=$(find /tmp/drm-kmod -path '*gpu/drm/i915/i915_pci.c'  | head -1)
           AMDC=$(find /tmp/drm-kmod -path '*amd/amdgpu/amdgpu_drv.c' | head -1)
           DRMP=$(find /tmp/drm-kmod -name drm_pciids.h | head -1)
-          test -f "$I915H" || { echo "i915_pciids.h not found in drm-kmod" >&2; exit 1; }
-          test -f "$I915C" || { echo "i915_pci.c not found in drm-kmod" >&2; exit 1; }
           test -f "$AMDC"  || { echo "amdgpu_drv.c not found in drm-kmod" >&2; exit 1; }
           test -f "$DRMP"  || { echo "drm_pciids.h not found in drm-kmod" >&2; exit 1; }
-          # 6.12 (#337): i915 ids come from the driver's pciidlist[] in i915_pci.c,
-          # preprocessor-expanded via the header (the flat INTEL_VGA_DEVICE(0x..)
-          # literals are gone). gen-i915 now takes both files.
-          "$T/gen-i915-personalities.sh"   "$I915H" "$I915C" org.nextbsd.kext.intelgraphics IntelGraphics  > pers/IntelGraphics.iokitpersonalities
-          # Count-band gate: pciidlist expansion yields ~364 ids on 6.12-lts. An
-          # empty/tiny table means the extraction silently broke on a header change.
-          NIG=$(grep -oE '0x[0-9a-f]{8}' pers/IntelGraphics.iokitpersonalities | sort -u | wc -l | tr -d ' ')
-          [ "$NIG" -ge 300 ] && [ "$NIG" -le 450 ] || { echo "i915 id count $NIG out of band [300,450] — pciidlist extraction likely broke" >&2; exit 1; }
+          # i915 is amd64-only: drm-kmod adds it to DEFAULT_KMODS for amd64/i386
+          # only, so on arm64 there is no i915kms.ko to carry these ids and
+          # generating them would produce a kext matching hardware that
+          # architecture does not have.
+          if [ "${{ matrix.target }}" = "amd64" ]; then
+            test -f "$I915H" || { echo "i915_pciids.h not found in drm-kmod" >&2; exit 1; }
+            test -f "$I915C" || { echo "i915_pci.c not found in drm-kmod" >&2; exit 1; }
+            # 6.12 (#337): i915 ids come from the driver's pciidlist[] in i915_pci.c,
+            # preprocessor-expanded via the header (the flat INTEL_VGA_DEVICE(0x..)
+            # literals are gone). gen-i915 now takes both files.
+            "$T/gen-i915-personalities.sh"   "$I915H" "$I915C" org.nextbsd.kext.intelgraphics IntelGraphics  > pers/IntelGraphics.iokitpersonalities
+            # Count-band gate: pciidlist expansion yields ~364 ids on 6.12-lts. An
+            # empty/tiny table means the extraction silently broke on a header change.
+            NIG=$(grep -oE '0x[0-9a-f]{8}' pers/IntelGraphics.iokitpersonalities | sort -u | wc -l | tr -d ' ')
+            [ "$NIG" -ge 300 ] && [ "$NIG" -le 450 ] || { echo "i915 id count $NIG out of band [300,450] — pciidlist extraction likely broke" >&2; exit 1; }
+          fi
           "$T/gen-amdgpu-personalities.sh" "$AMDC"  org.nextbsd.kext.amdgraphics   AMDGraphics    > pers/AMDGraphics.iokitpersonalities
           # De-overlap: radeon yields SI/CIK to amdgpu (this build compiles amdgpu
           # WITH CONFIG_DRM_AMDGPU_SI/_CIK), so feed amdgpu's match words to -x.
@@ -468,9 +502,14 @@ jobs:
           "$K" -o "$O" -l org.nextbsd.kext.iographics "$KO/ttm.ko" TTM org.nextbsd.kext.ttm
           # Per-vendor GPU kexts: depend on the drm core, carry their own device-id
           # match table. (Firmware bundling — ko2kext -f — is the next step.)
-          "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.ttm \
-               -p pers/IntelGraphics.iokitpersonalities \
-               "$KO/i915kms.ko" IntelGraphics org.nextbsd.kext.intelgraphics
+          # IntelGraphics only where i915 exists (amd64); see the personalities
+          # step. Guarded on the .ko rather than on matrix.target so the two
+          # cannot drift apart.
+          if [ -f "$KO/i915kms.ko" ]; then
+            "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.ttm \
+                 -p pers/IntelGraphics.iokitpersonalities \
+                 "$KO/i915kms.ko" IntelGraphics org.nextbsd.kext.intelgraphics
+          fi
           "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.ttm -l org.nextbsd.kext.dmabuf \
                -p pers/AMDGraphics.iokitpersonalities \
                "$KO/amdgpu.ko" AMDGraphics org.nextbsd.kext.amdgraphics
@@ -525,11 +564,16 @@ jobs:
             'DMABuf':         ('org.nextbsd.kext.dmabuf', None, []),
             'IOGraphics':     ('org.nextbsd.kext.iographics', None, ['org.nextbsd.kext.dmabuf']),
             'TTM':            ('org.nextbsd.kext.ttm', None, ['org.nextbsd.kext.iographics']),
-            'IntelGraphics':  ('org.nextbsd.kext.intelgraphics', '8086', ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm']),
             'AMDGraphics':    ('org.nextbsd.kext.amdgraphics', '1002', ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm','org.nextbsd.kext.dmabuf']),
             'RadeonGraphics': ('org.nextbsd.kext.radeongraphics', '1002', ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm']),
           }
           import os
+          # IntelGraphics is amd64-only (drm-kmod builds i915 for amd64/i386
+          # only), so it is checked exactly like the other optional kexts
+          # rather than assumed present -- on the arm64 leg it does not exist.
+          if os.path.exists('kexts/IntelGraphics.kext'):
+              checks['IntelGraphics'] = ('org.nextbsd.kext.intelgraphics', '8086',
+                                         ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm'])
           # Graphics kext series. Guarded on existence so the gate stays green
           # while the experimental builds are iterated. IOGraphicsExtras carries
           # no personalities (it is a library other drivers link against);
@@ -590,8 +634,10 @@ jobs:
           # Fold the virtual-GPU drivers into the same rule as they appear. Two
           # drivers claiming one id is the failure that makes a machine bind the
           # wrong driver, and it costs nothing to assert across the full set.
-          virt=[n for n in ('BochsGraphics','VBoxGraphics') if n in checks]
-          allmatched=['AMDGraphics','RadeonGraphics','IntelGraphics']+virt
+          # Build the list from what actually shipped: IntelGraphics is absent on
+          # arm64, and the virtual-GPU kexts are amd64-only too.
+          allmatched=[n for n in ('AMDGraphics','RadeonGraphics','IntelGraphics',
+                                  'BochsGraphics','VBoxGraphics') if n in checks]
           pairs=[(a,b) for i,a in enumerate(allmatched) for b in allmatched[i+1:]]
           for a,b in pairs:
               o=ids(a)&ids(b)
@@ -602,7 +648,7 @@ jobs:
       - name: Upload graphics kexts artifact
         uses: actions/upload-artifact@v4
         with:
-          name: graphics-kexts-amd64
+          name: graphics-kexts-${{ matrix.target }}
           path: kexts/**
 
   # Prove the graphics-kext IOKitPersonalities generators (i915/amdgpu/radeon) on
