@@ -288,10 +288,25 @@ if {$gfx_test} {
             }
             -re "not a bundle" { puts "\nFAIL: VBOX-LOAD VBoxGraphics is not a readable bundle"; exit 1 }
         }
-        send "kextstat | grep -qi vboxvideo && echo VBOX''_PRESENT || echo VBOX''_ABSENT\r"
+        # Match on the BUNDLE name, not the kld module name. kldstat lists the
+        # loaded file, which for a kext is the bundle binary
+        # (VBoxGraphics.kext/Contents/MacOS/VBoxGraphics) -- so "VBoxGraphics"
+        # appears and "vboxvideo", the KMOD name inside it, never does. The
+        # bochs stage above only passes because `grep -i bochs` happens to
+        # match "BochsGraphics"; grepping for vboxvideo here found nothing and
+        # reported a resident module as missing. Both spellings are accepted so
+        # this keeps working if kextstat ever reports the module name instead.
+        send "kextstat | grep -iE 'vboxgraphics|vboxvideo'\r"
+        expect { timeout { } -re {[#%$] $} { } }
+        send "kextstat | grep -qiE 'vboxgraphics|vboxvideo' && echo VBOX''_PRESENT || echo VBOX''_ABSENT\r"
         expect {
             timeout { puts "\nFAIL: VBOX-STAT timed out"; exit 1 }
-            "VBOX_ABSENT"  { puts "\nFAIL: VBoxGraphics loaded but absent from kextstat"; exit 1 }
+            "VBOX_ABSENT"  {
+                puts "\nFAIL: VBoxGraphics loaded but absent from kextstat"
+                send "kextstat\r"; expect { timeout {} -re {[#%$] $} {} }
+                send "kldstat\r"; expect { timeout {} -re {[#%$] $} {} }
+                exit 1
+            }
             "VBOX_PRESENT" { puts "\nOK: VBOX-STAT (vboxvideo resident; no bind expected in qemu)" }
         }
     }
