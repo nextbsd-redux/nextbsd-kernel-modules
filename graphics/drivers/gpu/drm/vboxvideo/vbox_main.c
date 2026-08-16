@@ -17,6 +17,84 @@
 #include "vboxvideo_guest.h"
 #include "vboxvideo_vbe.h"
 
+#ifdef __FreeBSD__
+/*
+ * linuxkpi has pci_request_region()/pci_release_region() and
+ * pci_iomap_range()/pci_iounmap(), but not the devres wrappers around them
+ * that Linux grew for 6.11 -- the same shape of gap as devm_arch_phys_wc_add()
+ * in vbox_ttm.c, and closed the same way, with devm_add_action_or_reset().
+ *
+ * The one semantic difference worth spelling out: linuxkpi's pci_iomap_range()
+ * returns NULL on failure (as Linux' does), while Linux' pcim_iomap_range()
+ * returns an ERR_PTR. The callers below test with IS_ERR()/PTR_ERR(), so the
+ * shim converts -- returning plain NULL here would sail past IS_ERR() and
+ * fault later on first access, which is far worse than failing to probe.
+ */
+struct vbox_pcim_region {
+	struct pci_dev *pdev;
+	int bar;
+};
+
+static void
+vbox_pcim_release_region(void *arg)
+{
+	struct vbox_pcim_region *r = arg;
+
+	pci_release_region(r->pdev, r->bar);
+}
+
+static int
+pcim_request_region(struct pci_dev *pdev, int bar, const char *name)
+{
+	struct vbox_pcim_region *r;
+	int ret;
+
+	ret = pci_request_region(pdev, bar, name);
+	if (ret != 0)
+		return (ret);
+
+	r = devm_kzalloc(&pdev->dev, sizeof(*r), GFP_KERNEL);
+	if (r == NULL) {
+		pci_release_region(pdev, bar);
+		return (-ENOMEM);
+	}
+	r->pdev = pdev;
+	r->bar = bar;
+	ret = devm_add_action_or_reset(&pdev->dev, vbox_pcim_release_region, r);
+	if (ret != 0)
+		return (ret);
+	return (0);
+}
+
+static void
+vbox_pcim_iounmap(void *arg)
+{
+	/*
+	 * pci_iounmap() takes the pci_dev only to pick the right unmap path;
+	 * linuxkpi ignores it, and the mapping address is what identifies the
+	 * region. NULL is what drm-kmod's own callers pass here.
+	 */
+	pci_iounmap(NULL, arg);
+}
+
+static void __iomem *
+pcim_iomap_range(struct pci_dev *pdev, int bar, unsigned long offset,
+    unsigned long maxlen)
+{
+	void __iomem *addr;
+	int ret;
+
+	addr = pci_iomap_range(pdev, bar, offset, maxlen);
+	if (addr == NULL)
+		return (IOMEM_ERR_PTR(-ENOMEM));
+
+	ret = devm_add_action_or_reset(&pdev->dev, vbox_pcim_iounmap, addr);
+	if (ret != 0)
+		return (IOMEM_ERR_PTR(ret));
+	return (addr);
+}
+#endif /* __FreeBSD__ */
+
 void vbox_report_caps(struct vbox_private *vbox)
 {
 	u32 caps = VBVACAPS_DISABLE_CURSOR_INTEGRATION |

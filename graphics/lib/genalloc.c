@@ -46,6 +46,19 @@
 #include <linux/platform_device.h>
 #include <linux/vmalloc.h>
 
+#ifdef __FreeBSD__
+/*
+ * linuxkpi has vzalloc(size) and vmalloc_node(size, node) but not the
+ * combination. Spelled from __vmalloc_node(), which is what both of those
+ * expand to (linux/slab.h), so the NUMA hint is preserved rather than
+ * silently dropped -- gen_pool_add_owner() passes the caller's nid here.
+ */
+#ifndef vzalloc_node
+#define	vzalloc_node(size, node)					\
+	__vmalloc_node((size), GFP_KERNEL | __GFP_NOWARN | __GFP_ZERO, (node))
+#endif
+#endif /* __FreeBSD__ */
+
 static inline size_t chunk_size(const struct gen_pool_chunk *chunk)
 {
 	return chunk->end_addr - chunk->start_addr + 1;

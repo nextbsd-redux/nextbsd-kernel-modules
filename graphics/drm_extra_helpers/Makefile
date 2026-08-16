@@ -8,6 +8,16 @@
 #
 #   drm_simple_kms_helper.c   pure drm-core, low risk         (bochs)
 #   drm_gem_vram_helper.c     TTM-coupled VRAM GEM, the gate  (bochs, vboxvideo)
+#   drm_gem_atomic_helper.c   shadow-buffered planes          (vboxvideo)
+#
+# The shadow-plane layer was added for vboxvideo, whose cursor plane is built
+# on DRM_GEM_SHADOW_PLANE_FUNCS. drm-kmod's include/drm/drm_gem_atomic_helper.h
+# is a 15-line stub declaring only drm_gem_plane_helper_prepare_fb(), so the
+# whole shadow API -- struct drm_shadow_plane_state, begin/end_shadow_fb_access,
+# the FUNCS macros -- is missing. The vendored .c excludes that ONE function
+# (drm.ko already exports it) and keeps everything after it. Every small driver
+# after this one -- ast, mgag200, virtio-gpu -- uses shadow planes too, which is
+# exactly why it belongs here rather than inside vboxvideo.
 #
 # Sources are vendored UNMODIFIED from Linux v6.12, matching drm-kmod's 6.12-lts.
 #
@@ -30,6 +40,7 @@ SRCS=	\
 	drm_simple_kms_helper.c \
 	drm_gem_vram_helper.c \
 	drm_gem_framebuffer_helper.c \
+	drm_gem_atomic_helper.c \
 	drm_extra_helpers_freebsd.c
 
 SRCS	+=			\
