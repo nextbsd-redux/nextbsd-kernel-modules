@@ -33,6 +33,18 @@ import sys
 # .ko by construction and are not a missing dependency.
 LINKER_SET_PREFIXES = ("__start_set_", "__stop_set_")
 
+# Symbols the kernel linker resolves per-module rather than from any symbol
+# table, so they are undefined in every .ko that references them and are not a
+# missing dependency either. kern_linker.c:912 handles this one by name:
+#
+#     /* Treat the __this_linker_file as a special symbol. This is a
+#      * global that each module refers to to get its own linker_file_t. */
+#     if (strcmp(name, "__this_linker_file") == 0) { ... }
+#
+# Found the honest way: the first run of this checker flagged it in 7 of 9
+# kexts, including ones already proven to load in the boot test.
+SYNTHESIZED = frozenset(("__this_linker_file",))
+
 STB_WEAK = 2
 SHN_UNDEF = 0
 SHT_SYMTAB = 2
@@ -126,7 +138,9 @@ def main():
         _, undefined = kexts[name]
         missing = sorted(
             s for s in undefined
-            if s not in provided and not s.startswith(LINKER_SET_PREFIXES)
+            if s not in provided
+            and s not in SYNTHESIZED
+            and not s.startswith(LINKER_SET_PREFIXES)
         )
         if missing:
             failed = True
