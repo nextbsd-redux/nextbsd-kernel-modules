@@ -29,7 +29,19 @@
 #define __GENALLOC_H__
 
 #include <linux/types.h>
+#ifdef __FreeBSD__
+/*
+ * linuxkpi has no <linux/spinlock_types.h>: spinlock_t is typedef'd in
+ * <linux/spinlock.h> instead (typedef struct mtx spinlock_t). Something on the
+ * drm-kmod include path satisfies the spinlock_types.h include WITHOUT
+ * defining the type, which is why iteration 1 failed as "unknown type name
+ * 'spinlock_t'" at the struct gen_pool below rather than as a missing header.
+ * spinlock.h is also what genalloc.c needs for spin_lock_irqsave() anyway.
+ */
+#include <linux/spinlock.h>
+#else
 #include <linux/spinlock_types.h>
+#endif
 #include <linux/atomic.h>
 
 struct device;
