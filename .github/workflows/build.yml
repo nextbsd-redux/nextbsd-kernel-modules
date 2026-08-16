@@ -500,6 +500,22 @@ jobs:
           echo "=== built kexts ==="
           for d in "$O"/*.kext; do echo "  $(basename "$d") ($(du -sh "$d" | cut -f1))"; done
 
+      # Catch the ENOEXEC class at BUILD time. A .ko links with undefined
+      # symbols dangling and resolves them at kldload, so it can compile,
+      # package and validate perfectly and still be dead on arrival. That is
+      # not hypothetical: drm-kmod ships drm_format_helper.c but names it in no
+      # Makefile, so adding the shadow-plane helpers (which embed a
+      # drm_format_conv_state) produced an IOGraphicsExtras.kext that built
+      # clean and then failed kldload with "Exec format error", taking
+      # BochsGraphics down with it. One CI cycle to find, and the symbol name
+      # was only in a dmesg dump the boot test exited before printing.
+      - name: Check every kext resolves (no ENOEXEC at kldload)
+        run: |
+          set -eu
+          KERN=$(find /usr/obj -type f -name kernel | head -1)
+          test -n "$KERN" || { echo "kernel not found under /usr/obj" >&2; exit 1; }
+          python3 nbkm-tools/tools/check-kext-symbols.py "$KERN" kexts
+
       - name: Validate graphics kext Info.plists + dependency chain
         run: |
           python3 - <<'PY'
