@@ -256,9 +256,15 @@ jobs:
           # rather than a build failure. amdgpu and radeonkms ARE expected on both:
           # discrete AMD cards in an arm64 machine's PCIe slot are a real
           # configuration, and drm-kmod builds them for aarch64 by default.
-          REQUIRED="drm amdgpu radeonkms"
+          # What must build is what we SHIP. amd64 ships all four; arm64 ships
+          # the DRM core and helpers only, so drm.ko is the whole requirement
+          # there -- amdgpu/radeonkms still build as drm-kmod defaults and are
+          # reported above, but their state cannot fail a build that does not
+          # package them.
           if [ "${{ matrix.target }}" = "amd64" ]; then
-            REQUIRED="$REQUIRED i915kms"
+            REQUIRED="drm amdgpu radeonkms i915kms"
+          else
+            REQUIRED="drm"
           fi
           for ko in $REQUIRED; do
             test -f "/tmp/ko-out/${ko}.ko" || { echo "FAIL: required ${ko}.ko not built" >&2; exit 1; }
@@ -444,6 +450,14 @@ jobs:
           I915C=$(find /tmp/drm-kmod -path '*gpu/drm/i915/i915_pci.c'  | head -1)
           AMDC=$(find /tmp/drm-kmod -path '*amd/amdgpu/amdgpu_drv.c' | head -1)
           DRMP=$(find /tmp/drm-kmod -name drm_pciids.h | head -1)
+          # Every matched-GPU kext is amd64-only. arm64 ships the DRM core and
+          # helpers only -- the drivers that would use these id tables either
+          # cannot load there (amdgpu) or serve hardware an ARM VM does not have
+          # (radeon: a discrete card in a physical PCIe slot). Generating them
+          # would produce match tables for kexts that are never packaged.
+          if [ "${{ matrix.target }}" != "amd64" ]; then
+            echo "==> ${{ matrix.target }}: no vendor-GPU personalities (core + helpers only)"
+          else
           test -f "$AMDC"  || { echo "amdgpu_drv.c not found in drm-kmod" >&2; exit 1; }
           test -f "$DRMP"  || { echo "drm_pciids.h not found in drm-kmod" >&2; exit 1; }
           # i915 is amd64-only: drm-kmod adds it to DEFAULT_KMODS for amd64/i386
@@ -466,18 +480,11 @@ jobs:
           # De-overlap: radeon yields SI/CIK to amdgpu (this build compiles amdgpu
           # WITH CONFIG_DRM_AMDGPU_SI/_CIK), so feed amdgpu's match words to -x.
           # The -x de-overlap exists because amdgpu CLAIMS the SI/CIK ids on this
-          # build (it compiles with CONFIG_DRM_AMDGPU_SI/_CIK). Where amdgpu does
-          # not ship at all -- arm64, whose amdgpu.ko upstream cannot make
-          # loadable -- there is nothing to de-overlap against, and excluding
-          # them would leave those cards with no driver rather than the older
-          # radeon one. So the exclusion follows the kext, not the arch name.
-          if [ -f /tmp/ko-out/amdgpu.ko ] && [ "${{ matrix.target }}" = "amd64" ]; then
-            grep -oE '0x[0-9a-f]{8}' pers/AMDGraphics.iokitpersonalities | sort -u > pers/amdgpu-match.txt
-            "$T/gen-radeon-personalities.sh" -x pers/amdgpu-match.txt "$DRMP" org.nextbsd.kext.radeongraphics RadeonGraphics > pers/RadeonGraphics.iokitpersonalities
-          else
-            echo "==> radeon keeps the SI/CIK ids on ${{ matrix.target }} (no AMDGraphics.kext ships there)"
-            "$T/gen-radeon-personalities.sh" "$DRMP" org.nextbsd.kext.radeongraphics RadeonGraphics > pers/RadeonGraphics.iokitpersonalities
-          fi
+          # build (it compiles with CONFIG_DRM_AMDGPU_SI/_CIK), so radeon must
+          # not also claim them. Both kexts are amd64-only, so this whole
+          # pairing is too -- see the wrap step for why arm64 ships neither.
+          grep -oE '0x[0-9a-f]{8}' pers/AMDGraphics.iokitpersonalities | sort -u > pers/amdgpu-match.txt
+          "$T/gen-radeon-personalities.sh" -x pers/amdgpu-match.txt "$DRMP" org.nextbsd.kext.radeongraphics RadeonGraphics > pers/RadeonGraphics.iokitpersonalities
           # bochs (graphics kext series): ids come from the vendored driver's own
           # bochs_pci_tbl[]. Skipped silently when the experimental build did not
           # produce a .ko, so this step stays green while that is iterated.
@@ -491,6 +498,7 @@ jobs:
             chmod +x "$T/gen-vboxvideo-personalities.sh"
             "$T/gen-vboxvideo-personalities.sh" /tmp/drm-kmod/drivers/gpu/drm/vboxvideo/vbox_drv.c \
                 org.nextbsd.kext.vboxgraphics VBoxGraphics > pers/VBoxGraphics.iokitpersonalities
+          fi
           fi
           echo "=== device-id counts ==="
           for f in pers/IntelGraphics AMDGraphics RadeonGraphics; do : ; done
@@ -521,8 +529,21 @@ jobs:
                  -p pers/IntelGraphics.iokitpersonalities \
                  "$KO/i915kms.ko" IntelGraphics org.nextbsd.kext.intelgraphics
           fi
-          # AMDGraphics is amd64-only, and NOT by choice -- upstream drm-kmod
-          # cannot produce a loadable amdgpu.ko on aarch64. kconfig.mk gates
+          # arm64 ships the DRM core and helpers ONLY. Neither AMD kext is
+          # packaged there, for two different reasons:
+          #
+          #   AMDGraphics     CANNOT work -- upstream drm-kmod cannot produce a
+          #                   loadable amdgpu.ko on aarch64 (see below).
+          #   RadeonGraphics  builds and resolves fine, but only ever matches a
+          #                   discrete AMD card in a physical PCIe slot, which
+          #                   is not what an ARM VM presents. Shipping it would
+          #                   add a kext no arm64 target can use.
+          #
+          # The arm64 KMS story is a driver that binds what an ARM VM actually
+          # has -- see nextbsd-arm64-kms-options.html.
+          #
+          # On the AMDGraphics side specifically, this is NOT by choice.
+          # kconfig.mk gates
           # DRM_AMD_DC_FP behind `.if ${MACHINE_CPUARCH} == "amd64"`, which drops
           # the Display Core floating-point source block from amd/amdgpu/Makefile
           # -- but the references to those symbols are compiled unconditionally.
@@ -544,9 +565,13 @@ jobs:
           else
             echo "==> AMDGraphics.kext SKIPPED on ${{ matrix.target }}: upstream amdgpu.ko is unloadable there (DRM_AMD_DC_FP is amd64-only)"
           fi
-          "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.ttm \
-               -p pers/RadeonGraphics.iokitpersonalities \
-               "$KO/radeonkms.ko" RadeonGraphics org.nextbsd.kext.radeongraphics
+          if [ "${{ matrix.target }}" = "amd64" ]; then
+            "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.ttm \
+                 -p pers/RadeonGraphics.iokitpersonalities \
+                 "$KO/radeonkms.ko" RadeonGraphics org.nextbsd.kext.radeongraphics
+          else
+            echo "==> RadeonGraphics.kext SKIPPED on ${{ matrix.target }}: matches only discrete PCIe cards, which an ARM VM does not present"
+          fi
           # Graphics kext series: the shared helper module first (bochs depends
           # on it), then bochs itself with its device-match personalities.
           if [ -f "$KO/drm_extra_helpers.ko" ]; then
@@ -595,7 +620,6 @@ jobs:
             'DMABuf':         ('org.nextbsd.kext.dmabuf', None, []),
             'IOGraphics':     ('org.nextbsd.kext.iographics', None, ['org.nextbsd.kext.dmabuf']),
             'TTM':            ('org.nextbsd.kext.ttm', None, ['org.nextbsd.kext.iographics']),
-            'RadeonGraphics': ('org.nextbsd.kext.radeongraphics', '1002', ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm']),
           }
           import os
           # IntelGraphics is amd64-only (drm-kmod builds i915 for amd64/i386
@@ -603,6 +627,9 @@ jobs:
           # rather than assumed present -- on the arm64 leg it does not exist.
           # AMDGraphics is absent on arm64 (see the wrap step: upstream amdgpu.ko
           # cannot load there), so it is checked only when it shipped.
+          if os.path.exists('kexts/RadeonGraphics.kext'):
+              checks['RadeonGraphics'] = ('org.nextbsd.kext.radeongraphics', '1002',
+                                          ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm'])
           if os.path.exists('kexts/AMDGraphics.kext'):
               checks['AMDGraphics'] = ('org.nextbsd.kext.amdgraphics', '1002',
                                        ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm','org.nextbsd.kext.dmabuf'])
