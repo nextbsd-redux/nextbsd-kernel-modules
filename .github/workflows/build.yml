@@ -343,7 +343,12 @@ jobs:
           echo "=== incomplete types ==="
           grep -oE "incomplete type '[^']+'" /tmp/extra-helpers-build.log 2>/dev/null | sort -u | head -30 || true
           echo "=== error count ==="
-          grep -c "error:" /tmp/extra-helpers-build.log 2>/dev/null || echo 0
+          # ": error:" not "error:" -- a bare match also counts the grep
+          # commands echoed into the log by `set -x`/step rendering, which
+          # inflated every count in the first runs and made a clean driver
+          # build read as 4 errors. Compiler diagnostics are always
+          # file:line:col: error:.
+          grep -c ": error:" /tmp/extra-helpers-build.log 2>/dev/null || echo 0
 
       # EXPERIMENTAL (graphics kext series, step 3): bochs, the plan's P0 driver.
       # Binds qemu's DEFAULT -vga std (1234:1111), so it device-matches in CI
@@ -383,7 +388,12 @@ jobs:
           echo "=== incomplete types ==="
           grep -oE "incomplete type '[^']+'" /tmp/bochs-build.log 2>/dev/null | sort -u | head -30 || true
           echo "=== error count ==="
-          grep -c "error:" /tmp/bochs-build.log 2>/dev/null || echo 0
+          # ": error:" not "error:" -- a bare match also counts the grep
+          # commands echoed into the log by `set -x`/step rendering, which
+          # inflated every count in the first runs and made a clean driver
+          # build read as 4 errors. Compiler diagnostics are always
+          # file:line:col: error:.
+          grep -c ": error:" /tmp/bochs-build.log 2>/dev/null || echo 0
 
       # EXPERIMENTAL (graphics kext series, step 4): vboxvideo (80ee:beef).
       # The cheapest driver in the plan, and cheap because bochs went first --
@@ -436,7 +446,12 @@ jobs:
           echo "=== first 40 error lines ==="
           grep -E "error:" /tmp/vboxvideo-build.log 2>/dev/null | head -40 || true
           echo "=== error count ==="
-          grep -c "error:" /tmp/vboxvideo-build.log 2>/dev/null || echo 0
+          # ": error:" not "error:" -- a bare match also counts the grep
+          # commands echoed into the log by `set -x`/step rendering, which
+          # inflated every count in the first runs and made a clean driver
+          # build read as 4 errors. Compiler diagnostics are always
+          # file:line:col: error:.
+          grep -c ": error:" /tmp/vboxvideo-build.log 2>/dev/null || echo 0
 
       # EXPERIMENTAL (graphics kext series, step 5): the LinuxKPI virtio shim.
       #
@@ -490,7 +505,12 @@ jobs:
           echo "=== first 40 error lines ==="
           grep -E "error:" /tmp/linux-virtio-build.log 2>/dev/null | head -40 || true
           echo "=== error count ==="
-          grep -c "error:" /tmp/linux-virtio-build.log 2>/dev/null || echo 0
+          # ": error:" not "error:" -- a bare match also counts the grep
+          # commands echoed into the log by `set -x`/step rendering, which
+          # inflated every count in the first runs and made a clean driver
+          # build read as 4 errors. Compiler diagnostics are always
+          # file:line:col: error:.
+          grep -c ": error:" /tmp/linux-virtio-build.log 2>/dev/null || echo 0
 
       # EXPERIMENTAL (graphics kext series, step 6): the shmem GEM helpers.
       #
@@ -537,7 +557,12 @@ jobs:
           echo "=== first 40 error lines ==="
           grep -E "error:" /tmp/shmem-helpers-build.log 2>/dev/null | head -40 || true
           echo "=== error count ==="
-          grep -c "error:" /tmp/shmem-helpers-build.log 2>/dev/null || echo 0
+          # ": error:" not "error:" -- a bare match also counts the grep
+          # commands echoed into the log by `set -x`/step rendering, which
+          # inflated every count in the first runs and made a clean driver
+          # build read as 4 errors. Compiler diagnostics are always
+          # file:line:col: error:.
+          grep -c ": error:" /tmp/shmem-helpers-build.log 2>/dev/null || echo 0
 
       # EXPERIMENTAL (graphics kext series, step 7): the driver itself.
       #
@@ -588,7 +613,12 @@ jobs:
           echo "=== first 40 error lines ==="
           grep -E "error:" /tmp/virtio-gpu-build.log 2>/dev/null | head -40 || true
           echo "=== error count ==="
-          grep -c "error:" /tmp/virtio-gpu-build.log 2>/dev/null || echo 0
+          # ": error:" not "error:" -- a bare match also counts the grep
+          # commands echoed into the log by `set -x`/step rendering, which
+          # inflated every count in the first runs and made a clean driver
+          # build read as 4 errors. Compiler diagnostics are always
+          # file:line:col: error:.
+          grep -c ": error:" /tmp/virtio-gpu-build.log 2>/dev/null || echo 0
 
       - name: Generate graphics IOKitPersonalities from drm-kmod source
         run: |
