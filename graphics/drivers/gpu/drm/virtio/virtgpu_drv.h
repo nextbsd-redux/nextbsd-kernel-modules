@@ -31,6 +31,13 @@
 #include <linux/virtio_ids.h>
 #include <linux/virtio_config.h>
 #include <linux/virtio_gpu.h>
+#ifdef __FreeBSD__
+/*
+ * uuid_t, for virtio_gpu_object::uuid below. Linux gets it transitively;
+ * linuxkpi has no <linux/uuid.h> at all, so this repo supplies one.
+ */
+#include <linux/uuid.h>
+#endif
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_drv.h>
@@ -534,5 +541,19 @@ void virtio_gpu_vram_unmap_dma_buf(struct device *dev,
 /* virtgpu_submit.c */
 int virtio_gpu_execbuffer_ioctl(struct drm_device *dev, void *data,
 				struct drm_file *file);
+
+#ifdef __FreeBSD__
+/*
+ * Entry points the newbus glue (virtio_gpu_drm_freebsd.c) calls into, exported
+ * from virtgpu_drv.c because probe/remove/config_changed and the feature table
+ * are static there. Declared here rather than only in the glue so that the
+ * definitions are checked against a prototype -- the kernel build is
+ * -Werror,-Wmissing-prototypes, which is how the first iteration failed.
+ */
+int virtio_gpu_bsd_probe(struct virtio_device *vdev);
+void virtio_gpu_bsd_remove(struct virtio_device *vdev);
+void virtio_gpu_bsd_config_changed(struct virtio_device *vdev);
+const unsigned int *virtio_gpu_bsd_features(unsigned int *count);
+#endif
 
 #endif

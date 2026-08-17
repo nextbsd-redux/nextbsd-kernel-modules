@@ -25,38 +25,40 @@
  */
 
 /*
- * LinuxKPI virtio shim: the virtio dma-buf wrapper.
+ * LinuxKPI addition: <linux/uuid.h>.
  *
- * This is a validation shell around dma_buf_export(): the point of the Linux
- * original is that a virtio-exported dma-buf is identifiable by its ops
- * pointer, so an importer can ask for the resource UUID that names the buffer
- * on the host side. The behaviour is entirely in the ops table, so this is a
- * faithful reimplementation rather than a stub.
+ * linuxkpi has no uuid.h, and virtio-gpu needs uuid_t in two places -- the
+ * resource UUID a buffer carries so a second device can identify it across a
+ * dma-buf export, and the get_uuid op in struct virtio_dma_buf_ops. Measured:
+ * without this, virtgpu_drv.h:99 and virtio_dma_buf.h both fail with "unknown
+ * type name 'uuid_t'".
+ *
+ * FreeBSD's <sys/uuid.h> also defines a uuid_t -- `struct uuid`, a different
+ * layout for the same 16 bytes. Which one a translation unit gets depends on
+ * include order, so this defers to FreeBSD's whenever that header has already
+ * been seen. Both are 16 bytes and virtio-gpu only ever memcpy()s the value
+ * between the host response and userspace, never interpreting the fields, so
+ * either spelling is correct here -- but defining a second uuid_t on top of
+ * FreeBSD's would not compile, and silently disagreeing about the layout in
+ * different TUs would be worse.
  */
 
-#ifndef _LINUXKPI_LINUX_VIRTIO_DMA_BUF_H_
-#define	_LINUXKPI_LINUX_VIRTIO_DMA_BUF_H_
+#ifndef _LINUXKPI_LINUX_UUID_H_
+#define	_LINUXKPI_LINUX_UUID_H_
 
-#include <linux/dma-buf.h>
-#include <linux/virtio.h>
-/*
- * After <linux/virtio.h>, which pulls in the linuxkpi headers: our uuid.h
- * defers to FreeBSD's <sys/uuid.h> if that has already been seen, so it must
- * not be the thing that establishes the include order.
- */
-#include <linux/uuid.h>
+#include <linux/types.h>
 
-struct virtio_dma_buf_ops {
-	struct dma_buf_ops	 ops;
-	int			(*device_attach)(struct dma_buf *,
-				    struct dma_buf_attachment *);
-	int			(*get_uuid)(struct dma_buf *, uuid_t *);
-};
+#define	UUID_SIZE	16
 
-int	virtio_dma_buf_attach(struct dma_buf *, struct dma_buf_attachment *);
-struct dma_buf *virtio_dma_buf_export(
-	    const struct dma_buf_export_info *exp_info);
-bool	is_virtio_dma_buf(struct dma_buf *dma_buf);
-int	virtio_dma_buf_get_uuid(struct dma_buf *dma_buf, uuid_t *uuid);
+#ifndef _SYS_UUID_H_
+typedef struct {
+	__u8	b[UUID_SIZE];
+} uuid_t;
 
-#endif	/* _LINUXKPI_LINUX_VIRTIO_DMA_BUF_H_ */
+#define	GUID_SIZE	16
+typedef struct {
+	__u8	b[GUID_SIZE];
+} guid_t;
+#endif	/* !_SYS_UUID_H_ */
+
+#endif	/* _LINUXKPI_LINUX_UUID_H_ */

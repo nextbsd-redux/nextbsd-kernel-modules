@@ -39,13 +39,26 @@
 /*
  * Transport feature bits, from the virtio spec. Spelled here rather than
  * included from FreeBSD's dev/virtio/virtio_config.h because that header is
- * not on a linuxkpi include path and carries its own VIRTIO_* status macros
- * that would collide.
+ * not on a linuxkpi include path.
+ *
+ * Guarded because the shim's own .c DOES see FreeBSD's copy -- it includes
+ * <dev/virtio/virtio.h>, which pulls virtio_config.h in, and the two headers
+ * define the same four bits to the same values. Unguarded, that is
+ * -Werror,-Wmacro-redefined and the shim does not build (measured, both
+ * arches). Same values either way, so first definition wins harmlessly.
  */
+#ifndef VIRTIO_RING_F_INDIRECT_DESC
 #define	VIRTIO_RING_F_INDIRECT_DESC	28
+#endif
+#ifndef VIRTIO_RING_F_EVENT_IDX
 #define	VIRTIO_RING_F_EVENT_IDX		29
+#endif
+#ifndef VIRTIO_F_VERSION_1
 #define	VIRTIO_F_VERSION_1		32
+#endif
+#ifndef VIRTIO_F_ACCESS_PLATFORM
 #define	VIRTIO_F_ACCESS_PLATFORM	33
+#endif
 
 struct virtio_shm_region {
 	uint64_t	addr;

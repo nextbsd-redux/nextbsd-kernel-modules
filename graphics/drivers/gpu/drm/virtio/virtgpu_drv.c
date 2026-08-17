@@ -55,6 +55,27 @@
  */
 SYSCTL_NODE(_hw, OID_AUTO, virtio_gpu_drm, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "virtio-gpu DRM parameters");
+
+/*
+ * pci_is_vga() is absent from linuxkpi. Transcribed from Linux v6.12's
+ * include/linux/pci.h, both arms: a virtio-vga function presents class
+ * 03 00 (PCI_CLASS_DISPLAY_VGA), while plain virtio-gpu-pci presents display
+ * class "other" and is correctly NOT a VGA device -- which is the whole point
+ * of the test here, since only the VGA form owns the legacy aperture that has
+ * to be taken away from efifb.
+ */
+#ifndef PCI_CLASS_NOT_DEFINED_VGA
+#define	PCI_CLASS_NOT_DEFINED_VGA	0x0001
+#endif
+static inline bool
+pci_is_vga(struct pci_dev *pdev)
+{
+	if ((pdev->class >> 8) == PCI_CLASS_DISPLAY_VGA)
+		return (true);
+	if ((pdev->class >> 8) == PCI_CLASS_NOT_DEFINED_VGA)
+		return (true);
+	return (false);
+}
 #endif /* __FreeBSD__ */
 
 static const struct drm_driver driver;
@@ -120,7 +141,17 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 	if (ret)
 		goto err_deinit;
 
+#ifndef __FreeBSD__
 	drm_fbdev_shmem_setup(vdev->priv, 32);
+#else
+	/*
+	 * No fbdev emulation: drm_fbdev_shmem.c needs fbdev deferred I/O, which
+	 * drm-kmod's fb_helper does not implement (no fbdefio member,
+	 * fb_deferred_io_init undeclared). This costs fbcon ON THIS GPU, not
+	 * KMS -- the console stays on efifb while /dev/dri/card0 serves X11 and
+	 * Mesa. See graphics/drm_shmem_helpers/Makefile.
+	 */
+#endif
 	return 0;
 
 err_deinit:
@@ -217,7 +248,17 @@ virtio_gpu_bsd_features(unsigned int *count)
 module_virtio_driver(virtio_gpu_driver);
 #endif
 
+#ifndef __FreeBSD__
 MODULE_DEVICE_TABLE(virtio, id_table);
+#else
+/*
+ * linuxkpi's MODULE_DEVICE_TABLE only knows the pci bus; spelled with `virtio`
+ * it expands to something the compiler reads as a function declaration with an
+ * untyped parameter list (-Wimplicit-int, measured on both arches). The
+ * equivalent metadata -- what devmatch reads to autoload the module for a
+ * device type -- is emitted by VIRTIO_SIMPLE_PNPINFO() in the newbus glue.
+ */
+#endif
 MODULE_DESCRIPTION("Virtio GPU driver");
 MODULE_LICENSE("GPL and additional rights");
 MODULE_AUTHOR("Dave Airlie <airlied@redhat.com>");

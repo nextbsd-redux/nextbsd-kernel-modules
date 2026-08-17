@@ -59,6 +59,20 @@
 
 typedef struct virtqueue bsd_virtqueue_t;
 
+/*
+ * FreeBSD's virtqueue_notify() captured before <linux/virtio.h> #defines that
+ * name onto lkpi_virtqueue_notify(). It is the one function whose name exists
+ * on both sides, so without this the shim's own implementation calls itself --
+ * measured as an incompatible-pointer error on both arches, and it would have
+ * been infinite recursion had the types happened to match.
+ */
+static inline void
+bsd_virtqueue_notify(bsd_virtqueue_t *vq)
+{
+
+	virtqueue_notify(vq);
+}
+
 #include <linux/dma-buf.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
@@ -191,7 +205,7 @@ void
 lkpi_virtqueue_notify(struct lkpi_virtqueue *vq)
 {
 
-	virtqueue_notify(VQ_BSD(vq));
+	bsd_virtqueue_notify(VQ_BSD(vq));
 }
 
 void *
