@@ -542,8 +542,71 @@ int virtio_gpu_execbuffer_ioctl(struct drm_device *dev, void *data,
 				struct drm_file *file);
 
 #ifdef __FreeBSD__
+#include <sys/systm.h>
+
+#include <linux/dma-fence.h>
 #include <linux/dma-mapping.h>
+#include <linux/err.h>
 #include <linux/scatterlist.h>
+#include <linux/uaccess.h>
+#include <linux/vmalloc.h>
+
+/*
+ * strncpy_from_user(): linuxkpi has copy_from_user but not the
+ * NUL-terminating form. copyinstr() is the native equivalent; the return
+ * conventions differ, so convert rather than alias. Linux returns the length
+ * NOT counting the terminator, or -EFAULT; copyinstr() reports a count that
+ * INCLUDES it, out of band.
+ */
+static inline long
+strncpy_from_user(char *dst, const void __user *src, long count)
+{
+	size_t done;
+
+	if (count <= 0)
+		return (-EINVAL);
+	if (copyinstr(src, dst, (size_t)count, &done) != 0)
+		return (-EFAULT);
+
+	return ((long)done - 1);
+}
+
+/*
+ * vmemdup_user(): allocate and copy in one step, as Linux does. Returns an
+ * ERR_PTR, not NULL, on failure -- callers test with IS_ERR(), so a shim that
+ * returned NULL would sail past the check and fault on first use.
+ */
+static inline void *
+vmemdup_user(const void __user *src, size_t len)
+{
+	void *p;
+
+	p = vmalloc(len);
+	if (p == NULL)
+		return (ERR_PTR(-ENOMEM));
+
+	if (copy_from_user(p, src, len) != 0) {
+		vfree(p);
+		return (ERR_PTR(-EFAULT));
+	}
+
+	return (p);
+}
+
+/*
+ * dma_fence_match_context(): Linux' version also walks a dma_fence_array, but
+ * neither drm-kmod nor linuxkpi has dma_fence_array at all -- and it is not
+ * needed here. The only caller, virtio_gpu_do_fence_wait(), is reached through
+ * dma_fence_unwrap_for_each(), which has already flattened any composite
+ * fence, so what arrives is always a leaf. Comparing contexts directly is the
+ * whole of the answer at that call site rather than an approximation of it.
+ */
+static inline bool
+dma_fence_match_context(struct dma_fence *fence, uint64_t context)
+{
+
+	return (fence->context == context);
+}
 
 /*
  * dma_sync_sgtable_for_device(): linuxkpi has the per-scatterlist call but not

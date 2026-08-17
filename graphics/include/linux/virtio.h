@@ -114,6 +114,13 @@ export_uuid(__u8 *dst, const uuid_t *src)
 	memcpy(dst, src, sizeof(uuid_t));
 }
 
+static inline void
+uuid_copy(uuid_t *dst, const uuid_t *src)
+{
+
+	memcpy(dst, src, sizeof(uuid_t));
+}
+
 struct lkpi_virtqueue;
 struct virtio_device;
 struct virtio_config_ops;

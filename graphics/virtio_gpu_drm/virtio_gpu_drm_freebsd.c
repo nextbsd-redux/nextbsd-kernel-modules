@@ -63,6 +63,9 @@
 
 #include <machine/bus.h>
 
+/* is_pci_device(), used to tell the PCI transport from virtio-mmio. */
+#include <dev/pci/pcivar.h>
+
 #include <dev/virtio/virtio.h>
 #include <dev/virtio/virtqueue.h>
 
