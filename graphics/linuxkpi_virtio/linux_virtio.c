@@ -87,13 +87,33 @@ MALLOC_DEFINE(M_LKPI_VIRTIO, "lkpivirtio", "LinuxKPI virtio shim");
 #define	VQ_BSD(vq)	((bsd_virtqueue_t *)(vq)->vq_bsd)
 
 /*
+ * Feature BIT NUMBERS, spelled locally and deliberately not reusing the
+ * VIRTIO_* names.
+ *
+ * This is the one translation unit that sees both worlds, and the two
+ * disagree about what those names mean: <dev/virtio/virtio_config.h> defines
+ * VIRTIO_RING_F_INDIRECT_DESC as (1UL << 28) -- a MASK -- while Linux, and so
+ * <linux/virtio_config.h>, defines it as 28, a bit NUMBER. Same spelling,
+ * different value, no warning. Using the shared name here shifted by the mask
+ * instead of by the bit and produced `shift count >= width of type` on both
+ * arches; had the numbers been smaller it would have silently negotiated the
+ * wrong features.
+ *
+ * Everywhere else in the tree only the Linux headers are visible, so the
+ * driver's own VIRTIO_* uses are bit numbers and correct.
+ */
+#define	LKPI_VIRTIO_BIT_INDIRECT_DESC	28
+#define	LKPI_VIRTIO_BIT_VERSION_1	32
+
+/*
  * Feature bits this shim always asks the transport for, on top of whatever the
  * driver's feature_table names. VERSION_1 selects the modern (non-legacy)
  * layout, which is what every virtio-gpu host presents; INDIRECT_DESC is what
  * keeps a multi-segment transfer from consuming one ring slot per page.
  */
 #define	LKPI_VIRTIO_TRANSPORT_FEATURES					\
-	((1ULL << VIRTIO_F_VERSION_1) | (1ULL << VIRTIO_RING_F_INDIRECT_DESC))
+	((1ULL << LKPI_VIRTIO_BIT_VERSION_1) |				\
+	 (1ULL << LKPI_VIRTIO_BIT_INDIRECT_DESC))
 
 /* ------------------------------------------------------------------------ */
 /* Virtqueue operations							    */
@@ -372,7 +392,7 @@ lkpi_virtio_find_vqs(struct virtio_device *vdev, unsigned int nvqs,
 	 * ring slots directly. That ceiling is FreeBSD's, not the spec's.
 	 */
 	indirect = virtio_with_feature(vdev->bsddev,
-	    1ULL << VIRTIO_RING_F_INDIRECT_DESC) ? VIRTIO_MAX_INDIRECT : 0;
+	    1ULL << LKPI_VIRTIO_BIT_INDIRECT_DESC) ? VIRTIO_MAX_INDIRECT : 0;
 
 	for (i = 0; i < nvqs; i++) {
 		vq = malloc(sizeof(*vq), M_LKPI_VIRTIO, M_WAITOK | M_ZERO);

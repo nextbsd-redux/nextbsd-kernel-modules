@@ -33,14 +33,18 @@
  * without this, virtgpu_drv.h:99 and virtio_dma_buf.h both fail with "unknown
  * type name 'uuid_t'".
  *
- * FreeBSD's <sys/uuid.h> also defines a uuid_t -- `struct uuid`, a different
- * layout for the same 16 bytes. Which one a translation unit gets depends on
- * include order, so this defers to FreeBSD's whenever that header has already
- * been seen. Both are 16 bytes and virtio-gpu only ever memcpy()s the value
- * between the host response and userspace, never interpreting the fields, so
- * either spelling is correct here -- but defining a second uuid_t on top of
- * FreeBSD's would not compile, and silently disagreeing about the layout in
- * different TUs would be worse.
+ * <sys/uuid.h> declares `struct uuid` and typedefs uuid_t onto it -- but the
+ * typedef is inside its `#else /* _KERNEL */` arm, so KERNEL code gets the
+ * struct and no typedef at all. An earlier version of this header guarded on
+ * _SYS_UUID_H_ to avoid a clash, which suppressed the definition without
+ * anything supplying one; measured on both arches as "unknown type name
+ * 'uuid_t'" in three files. The definition is therefore unconditional: in
+ * kernel code there is nothing to collide with.
+ *
+ * Layout follows Linux' -- 16 opaque bytes -- which is also what the virtio
+ * spec puts on the wire. virtio-gpu only ever memcpy()s the value between the
+ * host response and userspace and never interprets the fields, so byte
+ * identity is the whole requirement.
  */
 
 #ifndef _LINUXKPI_LINUX_UUID_H_
@@ -49,16 +53,14 @@
 #include <linux/types.h>
 
 #define	UUID_SIZE	16
+#define	GUID_SIZE	16
 
-#ifndef _SYS_UUID_H_
 typedef struct {
 	__u8	b[UUID_SIZE];
 } uuid_t;
 
-#define	GUID_SIZE	16
 typedef struct {
 	__u8	b[GUID_SIZE];
 } guid_t;
-#endif	/* !_SYS_UUID_H_ */
 
 #endif	/* _LINUXKPI_LINUX_UUID_H_ */

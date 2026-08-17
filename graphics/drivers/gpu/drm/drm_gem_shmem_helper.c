@@ -97,8 +97,21 @@ __drm_gem_shmem_create(struct drm_device *dev, size_t size, bool private)
 		 * why this is required _and_ expected if you're
 		 * going to pin these pages.
 		 */
+#ifndef __FreeBSD__
 		mapping_set_gfp_mask(obj->filp->f_mapping, GFP_HIGHUSER |
 				     __GFP_RETRY_MAYFAIL | __GFP_NOWARN);
+#else
+		/*
+		 * No equivalent, and none needed. This tells Linux' page
+		 * allocator to keep these pages out of the MOVABLE zone
+		 * because they are about to be pinned indefinitely. Our
+		 * backing store is an OBJT_SWAP vm_object, which has no
+		 * movable zone to be placed in and no per-mapping allocation
+		 * mask -- the pages are wired by the fault handler when they
+		 * are first touched. Dropping the hint changes placement
+		 * policy, not correctness.
+		 */
+#endif
 	}
 
 	return shmem;
@@ -458,7 +471,18 @@ void drm_gem_shmem_purge(struct drm_gem_shmem_object *shmem)
 
 	shmem->madv = -1;
 
+#ifndef __FreeBSD__
 	drm_vma_node_unmap(&obj->vma_node, dev->anon_inode->i_mapping);
+#else
+	/*
+	 * drm_vma_node_unmap() takes a `void *obj` here rather than an
+	 * address_space, and passes it straight to unmap_mapping_range(),
+	 * which wants the vm_object backing the mappings. struct drm_device
+	 * has no anon_inode to route through -- the backing store IS the GEM
+	 * object's swap object, so name it directly.
+	 */
+	drm_vma_node_unmap(&obj->vma_node, obj->filp->f_shmem);
+#endif
 	drm_gem_free_mmap_offset(obj);
 
 	/* Our goal here is to return as much of the memory as
@@ -466,9 +490,24 @@ void drm_gem_shmem_purge(struct drm_gem_shmem_object *shmem)
 	 * To do this we must instruct the shmfs to drop all of its
 	 * backing pages, *now*.
 	 */
+#ifndef __FreeBSD__
 	shmem_truncate_range(file_inode(obj->filp), 0, (loff_t)-1);
 
 	invalidate_mapping_pages(file_inode(obj->filp)->i_mapping, 0, (loff_t)-1);
+#else
+	/*
+	 * linuxkpi's shmem_truncate_range() takes the vm_object itself, where
+	 * Linux' takes the inode -- struct vnode carries no i_mapping to reach
+	 * it through.
+	 *
+	 * The invalidate_mapping_pages() call has no counterpart and needs
+	 * none: on Linux it is a second pass to drop clean page-cache pages
+	 * that truncation left behind. Truncating an OBJT_SWAP object frees
+	 * its pages and releases the swap blocks outright, so there is no
+	 * residue for a second pass to find.
+	 */
+	shmem_truncate_range(obj->filp->f_shmem, 0, (loff_t)-1);
+#endif
 }
 EXPORT_SYMBOL(drm_gem_shmem_purge);
 
@@ -531,7 +570,18 @@ static vm_fault_t drm_gem_shmem_fault(struct vm_fault *vmf)
 	} else {
 		page = shmem->pages[page_offset];
 
+#ifndef __FreeBSD__
 		ret = vmf_insert_pfn(vma, vmf->address, page_to_pfn(page));
+#else
+		/*
+		 * linuxkpi provides only the _prot form. Linux' plain
+		 * vmf_insert_pfn() is defined as exactly this call with the
+		 * vma's own protection, so passing vm_page_prot reproduces it
+		 * rather than approximating it.
+		 */
+		ret = vmf_insert_pfn_prot(vma, vmf->address, page_to_pfn(page),
+					  vma->vm_page_prot);
+#endif
 	}
 
 	dma_resv_unlock(shmem->base.resv);
@@ -604,7 +654,20 @@ int drm_gem_shmem_mmap(struct drm_gem_shmem_object *shmem, struct vm_area_struct
 		vma->vm_private_data = NULL;
 		vma->vm_ops = NULL;
 
+#ifndef __FreeBSD__
 		ret = dma_buf_mmap(obj->dma_buf, vma, 0);
+#else
+		/*
+		 * dma_buf_mmap() does not exist in linuxkpi -- mapping an
+		 * imported dma-buf through the exporter's own mmap path has no
+		 * implementation to call into. This arm is unreachable for the
+		 * driver that uses this helper today: virtio-gpu's
+		 * gem_prime_import_sg_table() returns -ENODEV, so it never owns
+		 * an imported object to be asked to map. Returning the same
+		 * error keeps that honest instead of faulting.
+		 */
+		ret = -ENODEV;
+#endif
 
 		/* Drop the reference drm_gem_mmap_obj() acquired.*/
 		if (!ret)
