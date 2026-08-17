@@ -8,6 +8,15 @@ on:
     # `continuous` release (always present), so a PR needs no run_id, and PR
     # runs never publish — see the publish job's `if`.
     paths:
+      # The vendored DRM sources are the most fragile code here and were, until
+      # now, the one thing PRs did not build. Every graphics PR so far got CI
+      # only incidentally, because it happened to also touch build.yml or
+      # tests/ -- a graphics-only change (like the VRAM fictitious-range fix)
+      # silently got no validation at all.
+      - 'graphics/**'
+      - 'tools/check-kext-symbols.py'
+      - 'tools/gen-bochs-personalities.sh'
+      - 'tools/gen-vboxvideo-personalities.sh'
       - '.github/workflows/build.yml'
       - 'tools/ko2kext.sh'
       - 'tools/gen-iwlwifi-personalities.sh'

@@ -21,6 +21,18 @@
 #include <drm/ttm/ttm_range_manager.h>
 #include <drm/ttm/ttm_tt.h>
 
+#ifdef __FreeBSD__
+/*
+ * For vm_phys_fictitious_reg_range()/_unreg_range(). See the long comment in
+ * drm_vram_mm_init() -- TTM hands device-BAR pfns to
+ * lkpi_vmf_insert_pfn_prot_locked(), which needs a real vm_page behind them.
+ */
+#include <vm/vm.h>
+#include <vm/vm_param.h>
+#include <vm/vm_page.h>
+#include <vm/vm_phys.h>
+#endif
+
 static const struct drm_gem_object_funcs drm_gem_vram_object_funcs;
 
 /**
@@ -967,6 +979,7 @@ void drm_vram_mm_debugfs_init(struct drm_minor *minor)
 }
 EXPORT_SYMBOL(drm_vram_mm_debugfs_init);
 
+
 static int drm_vram_mm_init(struct drm_vram_mm *vmm, struct drm_device *dev,
 			    uint64_t vram_base, size_t vram_size)
 {
@@ -974,6 +987,49 @@ static int drm_vram_mm_init(struct drm_vram_mm *vmm, struct drm_device *dev,
 
 	vmm->vram_base = vram_base;
 	vmm->vram_size = vram_size;
+
+#ifdef __FreeBSD__
+	/*
+	 * Register the VRAM aperture as a fictitious page range.
+	 *
+	 * TTM feeds raw device-BAR pfns to lkpi_vmf_insert_pfn_prot_locked()
+	 * for any iomem-resident BO -- which every scanout buffer becomes the
+	 * moment it is pinned. That function resolves the pfn with
+	 * PHYS_TO_VM_PAGE() and then requires a *managed, unbusied* vm_page:
+	 * it calls vm_page_busy_acquire() and asserts VPO_UNMANAGED is clear.
+	 * Device memory has no such page unless the range was registered:
+	 * vm_phys_fictitious_init_range() is what supplies one, and it
+	 * explicitly clears VPO_UNMANAGED and sets busy_lock = VPB_UNBUSIED.
+	 *
+	 * Without this, the first touch of a pinned scanout buffer blocks the
+	 * faulting thread forever in vm_page_busy_acquire(). See
+	 * nextbsd-kernel#71.
+	 *
+	 * This is the same thing amdgpu (amdgpu_device.c), radeon
+	 * (radeon_fbdev.c) and i915 (intel_fbdev.c) do via drm-kmod's
+	 * register_fictitious_range(). We call vm_phys_fictitious_reg_range()
+	 * directly: drm_os_freebsd.h is private to drm-kmod's build and is not
+	 * on our include path, the wrapper additionally calls
+	 * vt_freeze_main_vd() which bochs already does via
+	 * drm_aperture_remove_conflicting_pci_framebuffers(), and the wrapper
+	 * does MPASS(ret == 0) where we would rather handle the error.
+	 *
+	 * drm_gem_vram_helper does not exist in drm-kmod at all, so no
+	 * upstream driver has ever driven this path -- which is why the
+	 * omission has gone unnoticed.
+	 */
+	ret = vm_phys_fictitious_reg_range(vram_base, vram_base + vram_size,
+	    VM_MEMATTR_WRITE_COMBINING);
+	if (ret != 0) {
+		DRM_ERROR("failed to register VRAM fictitious range "
+		    "[%#jx-%#jx): %d\n", (uintmax_t)vram_base,
+		    (uintmax_t)(vram_base + vram_size), ret);
+		return (-ret);
+	}
+	DRM_INFO("registered VRAM fictitious range [%#jx-%#jx) (%zu MiB)\n",
+	    (uintmax_t)vram_base, (uintmax_t)(vram_base + vram_size),
+	    vram_size >> 20);
+#endif
 
 	ret = ttm_device_init(&vmm->bdev, &bo_driver, dev->dev,
 #ifdef __linux__
@@ -991,21 +1047,42 @@ static int drm_vram_mm_init(struct drm_vram_mm *vmm, struct drm_device *dev,
 #endif
 				 dev->vma_offset_manager,
 				 false, true);
-	if (ret)
+	if (ret) {
+#ifdef __FreeBSD__
+		vm_phys_fictitious_unreg_range(vram_base,
+		    vram_base + vram_size);
+#endif
 		return ret;
+	}
 
 	ret = ttm_range_man_init(&vmm->bdev, TTM_PL_VRAM,
 				 false, vram_size >> PAGE_SHIFT);
 	if (ret)
-		return ret;
+		goto err_dev_fini;
 
 	return 0;
+
+err_dev_fini:
+	ttm_device_fini(&vmm->bdev);
+#ifdef __FreeBSD__
+	vm_phys_fictitious_unreg_range(vram_base, vram_base + vram_size);
+#endif
+	return ret;
 }
 
 static void drm_vram_mm_cleanup(struct drm_vram_mm *vmm)
 {
 	ttm_range_man_fini(&vmm->bdev, TTM_PL_VRAM);
 	ttm_device_fini(&vmm->bdev);
+#ifdef __FreeBSD__
+	/*
+	 * Must be unregistered, and exactly once: a second reg_range() over an
+	 * overlapping span returns EINVAL, so a kldunload/kldload cycle would
+	 * otherwise fail to re-register and reintroduce the hang.
+	 */
+	vm_phys_fictitious_unreg_range(vmm->vram_base,
+	    vmm->vram_base + vmm->vram_size);
+#endif
 }
 
 /*
