@@ -707,9 +707,14 @@ jobs:
           #   dscl401_spl_calc_lb_num_partitions
           #
           # Found by tools/check-kext-symbols.py on this job's first arm64 run.
-          # radeonkms has no such gap and IS shipped on arm64. Deleting this
-          # guard is the test for whether upstream has fixed it: the symbol gate
-          # will fail the build again if not.
+          # Deleting this guard is the test for whether upstream has fixed it:
+          # the symbol gate will fail the build again if not.
+          #
+          # radeonkms has no such gap -- it builds and resolves cleanly on
+          # aarch64 -- but it is not packaged there either, for a separate
+          # reason: it only ever matches a discrete AMD card in a physical PCIe
+          # slot, which an ARM VM does not present. amd64 ships both kexts
+          # exactly as before.
           if [ "${{ matrix.target }}" = "amd64" ]; then
             "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.ttm -l org.nextbsd.kext.dmabuf \
                  -p pers/AMDGraphics.iokitpersonalities \
