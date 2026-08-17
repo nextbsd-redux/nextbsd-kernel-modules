@@ -31,13 +31,12 @@
 #include <linux/virtio_ids.h>
 #include <linux/virtio_config.h>
 #include <linux/virtio_gpu.h>
-#ifdef __FreeBSD__
 /*
- * uuid_t, for virtio_gpu_object::uuid below. Linux gets it transitively;
- * linuxkpi has no <linux/uuid.h> at all, so this repo supplies one.
+ * uuid_t, for virtio_gpu_object::uuid below, arrives with <linux/virtio.h>
+ * above. linuxkpi's own <linux/uuid.h> defines guid_t but not uuid_t, and it
+ * wins the include search, so the type is supplemented there rather than by a
+ * header of ours that could never be found.
  */
-#include <linux/uuid.h>
-#endif
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_drv.h>

@@ -13,6 +13,16 @@
 
 #ifdef CONFIG_X86
 #include <asm/set_memory.h>
+
+#ifdef __FreeBSD__
+/*
+ * For VM_OBJECT_WLOCK/WUNLOCK around lkpi_vmf_insert_pfn_prot_locked() in the
+ * fault handler; drm-kmod's ttm_bo_vm.c pulls in the same pair for the same
+ * reason.
+ */
+#include <vm/vm.h>
+#include <vm/vm_object.h>
+#endif
 #endif
 
 #include <drm/drm.h>
@@ -574,13 +584,30 @@ static vm_fault_t drm_gem_shmem_fault(struct vm_fault *vmf)
 		ret = vmf_insert_pfn(vma, vmf->address, page_to_pfn(page));
 #else
 		/*
-		 * linuxkpi provides only the _prot form. Linux' plain
-		 * vmf_insert_pfn() is defined as exactly this call with the
-		 * vma's own protection, so passing vm_page_prot reproduces it
-		 * rather than approximating it.
+		 * linuxkpi has no plain vmf_insert_pfn(), and its
+		 * vmf_insert_pfn_prot() is deliberately POISONED --
+		 *
+		 *   #define vmf_insert_pfn_prot(...) _Static_assert(false,
+		 *     "This function is always called in a loop. Consider
+		 *      using the locked version")
+		 *
+		 * -- so naming it is a compile error by design, which is how
+		 * the first attempt failed ("expected expression"). The
+		 * sanctioned entry point is the _locked form with the VM
+		 * object write lock held by the caller, taken here exactly as
+		 * drm-kmod's own ttm_bo_vm.c does around the same call.
+		 *
+		 * This is the same machinery behind the fictitious-range rule
+		 * for VRAM-backed drivers, and the reason it does not bite
+		 * here: these pages are ordinary swap-object pages with real
+		 * managed vm_page structures, not device-BAR pfns, so
+		 * PHYS_TO_VM_PAGE() resolves them without any range having to
+		 * be registered first.
 		 */
-		ret = vmf_insert_pfn_prot(vma, vmf->address, page_to_pfn(page),
-					  vma->vm_page_prot);
+		VM_OBJECT_WLOCK(vma->vm_obj);
+		ret = lkpi_vmf_insert_pfn_prot_locked(vma, vmf->address,
+		    page_to_pfn(page), vma->vm_page_prot);
+		VM_OBJECT_WUNLOCK(vma->vm_obj);
 #endif
 	}
 

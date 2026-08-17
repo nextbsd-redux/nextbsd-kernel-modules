@@ -68,6 +68,32 @@
 #include <linux/scatterlist.h>
 #include <linux/gfp.h>
 #include <linux/slab.h>
+#include <linux/uuid.h>
+
+/*
+ * uuid_t, supplemented rather than supplied.
+ *
+ * linuxkpi DOES ship <linux/uuid.h>, and its -I comes before ours by design --
+ * our headers must only ever be findable, never shadow a real one. So a
+ * uuid.h of our own is dead code that can never be reached, which is exactly
+ * what the first attempt at this was: the file existed, was never included by
+ * anything, and virtgpu_drv.h still failed with "unknown type name 'uuid_t'"
+ * in four translation units.
+ *
+ * What linuxkpi's header actually provides is guid_t, UUID_SIZE and the
+ * guid helpers -- but not uuid_t, which is the one virtio-gpu needs for the
+ * resource UUID that names a buffer to a second device across a dma-buf
+ * export. So it is defined here, in a header linuxkpi has no copy of and
+ * cannot shadow. Same shape as Linux' (16 opaque bytes) and as the wire
+ * format. If linuxkpi ever adds uuid_t this becomes a redefinition error,
+ * which is the right way to find out.
+ */
+#ifndef UUID_SIZE
+#define	UUID_SIZE	16
+#endif
+typedef struct {
+	__u8	b[UUID_SIZE];
+} uuid_t;
 
 struct lkpi_virtqueue;
 struct virtio_device;

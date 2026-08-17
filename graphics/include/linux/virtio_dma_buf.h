@@ -38,13 +38,8 @@
 #define	_LINUXKPI_LINUX_VIRTIO_DMA_BUF_H_
 
 #include <linux/dma-buf.h>
+/* uuid_t comes from here -- see the note in <linux/virtio.h>. */
 #include <linux/virtio.h>
-/*
- * After <linux/virtio.h>, which pulls in the linuxkpi headers: our uuid.h
- * defers to FreeBSD's <sys/uuid.h> if that has already been seen, so it must
- * not be the thing that establishes the include order.
- */
-#include <linux/uuid.h>
 
 struct virtio_dma_buf_ops {
 	struct dma_buf_ops	 ops;
