@@ -542,6 +542,22 @@ int virtio_gpu_execbuffer_ioctl(struct drm_device *dev, void *data,
 				struct drm_file *file);
 
 #ifdef __FreeBSD__
+#include <linux/dma-mapping.h>
+#include <linux/scatterlist.h>
+
+/*
+ * dma_sync_sgtable_for_device(): linuxkpi has the per-scatterlist call but not
+ * the sg_table wrapper. Linux defines the wrapper as exactly this, and
+ * virtio-gpu needs it on the two paths that hand a freshly filled backing
+ * store to the host.
+ */
+static inline void
+dma_sync_sgtable_for_device(struct device *dev, struct sg_table *sgt,
+			    enum dma_data_direction dir)
+{
+	dma_sync_sg_for_device(dev, sgt->sgl, sgt->orig_nents, dir);
+}
+
 /*
  * Entry points the newbus glue (virtio_gpu_drm_freebsd.c) calls into, exported
  * from virtgpu_drv.c because probe/remove/config_changed and the feature table

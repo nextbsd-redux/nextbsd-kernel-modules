@@ -28,6 +28,22 @@
 
 #include "virtgpu_drv.h"
 
+#ifdef __FreeBSD__
+#include <sys/param.h>
+#include <sys/sysctl.h>
+
+/*
+ * DECL, not NODE. linuxkpi's moduleparam.h expands a driver's tunables into
+ * whichever translation unit declares them, and this file has one
+ * (virglhack, below) just as virtgpu_drv.c has modeset -- so both need
+ * hw.virtio_gpu_drm to be visible. Only ONE of them may define it: two
+ * SYSCTL_NODEs of the same name are a duplicate symbol at link
+ * (sysctl___hw_virtio_gpu_drm), which is how the bochs port lost an iteration.
+ * virtgpu_drv.c defines it; this declares it.
+ */
+SYSCTL_DECL(_hw_virtio_gpu_drm);
+#endif
+
 static int virtio_gpu_virglrenderer_workaround = 1;
 module_param_named(virglhack, virtio_gpu_virglrenderer_workaround, int, 0400);
 

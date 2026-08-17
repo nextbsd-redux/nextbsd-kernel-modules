@@ -23,18 +23,7 @@
  * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifdef __FreeBSD__
-/*
- * linuxkpi grew <linux/string_helpers.h> in 2025 as a one-line wrapper around
- * <linux/string_choices.h>. Whether the base snapshot this builds against has
- * either is a moving target, and str_yes_no() is the only thing this file
- * wants from them -- so define it rather than take a dependency on the header
- * race.
- */
-#define	str_yes_no(x)	((x) ? "yes" : "no")
-#else
 #include <linux/string_helpers.h>
-#endif
 
 #include <drm/drm_debugfs.h>
 #include <drm/drm_file.h>

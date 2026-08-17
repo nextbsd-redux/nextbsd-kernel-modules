@@ -95,6 +95,25 @@ typedef struct {
 	__u8	b[UUID_SIZE];
 } uuid_t;
 
+/*
+ * import_uuid() likewise: linuxkpi ships import_guid()/export_guid() but not
+ * the uuid_t pair. virtio-gpu calls this to lift the resource UUID out of the
+ * host's response, where the wire format is 16 bytes in the order sent.
+ */
+static inline void
+import_uuid(uuid_t *dst, const __u8 *src)
+{
+
+	memcpy(dst, src, sizeof(uuid_t));
+}
+
+static inline void
+export_uuid(__u8 *dst, const uuid_t *src)
+{
+
+	memcpy(dst, src, sizeof(uuid_t));
+}
+
 struct lkpi_virtqueue;
 struct virtio_device;
 struct virtio_config_ops;
