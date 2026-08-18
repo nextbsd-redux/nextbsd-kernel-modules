@@ -45,6 +45,17 @@ SYSCTL_DECL(_hw_virtio_gpu_drm);
 #endif
 
 static int virtio_gpu_virglrenderer_workaround = 1;
+#ifdef __FreeBSD__
+/*
+ * linuxkpi's module_param_named() references linuxkpi_<prefix><name>_desc,
+ * which only MODULE_PARM_DESC() defines -- so a parameter declared without one
+ * builds and packages cleanly and then fails kldload with ENOEXEC on the
+ * missing symbol. Upstream gives modeset a description and virglhack none,
+ * which is why only this one broke. Text paraphrased from the comment above
+ * virtio_gpu_is_shmem() rather than invented.
+ */
+MODULE_PARM_DESC(virglhack, "Force shmem BOs to be page-aligned for virglrenderer");
+#endif
 module_param_named(virglhack, virtio_gpu_virglrenderer_workaround, int, 0400);
 
 int virtio_gpu_resource_id_get(struct virtio_gpu_device *vgdev, uint32_t *resid)
