@@ -63,9 +63,6 @@
 
 #include <machine/bus.h>
 
-/* is_pci_device(), used to tell the PCI transport from virtio-mmio. */
-#include <dev/pci/pcivar.h>
-
 #include <dev/virtio/virtio.h>
 #include <dev/virtio/virtqueue.h>
 
@@ -98,6 +95,27 @@ struct virtio_gpu_drm_softc {
  */
 VIRTIO_SIMPLE_PNPINFO(virtio_gpu_drm, VIRTIO_ID_GPU,
     "VirtIO GPU (DRM/KMS)");
+
+/*
+ * Is this virtio device on the PCI transport rather than virtio-mmio?
+ *
+ * Open-coded rather than calling is_pci_device(): that helper exists only in
+ * -CURRENT, and this builds against releng/15.0, where it is absent. The
+ * logic is the same one it uses -- ask whether the bus this device hangs off
+ * is the pci devclass -- and it costs nothing to carry until the base
+ * snapshot moves. Including <dev/pci/pcivar.h> to reach for it was actively
+ * harmful: it perturbed the include order linuxkpi's own <linux/pci.h> needs
+ * and left struct pci_devinfo incomplete inside that header.
+ */
+static bool
+virtio_gpu_transport_is_pci(device_t transport)
+{
+	devclass_t dc;
+
+	dc = device_get_devclass(device_get_parent(transport));
+
+	return (dc != NULL && dc == devclass_find("pci"));
+}
 
 static int
 virtio_gpu_drm_probe(device_t dev)
@@ -145,7 +163,7 @@ virtio_gpu_drm_attach(device_t dev)
 	 * and sufficient.
 	 */
 	parent = device_get_parent(dev);
-	if (is_pci_device(parent)) {
+	if (virtio_gpu_transport_is_pci(parent)) {
 		/*
 		 * lkpinew_pci_dev() builds a complete struct pci_dev around an
 		 * existing newbus PCI device -- which is exactly our situation,
