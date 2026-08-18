@@ -188,10 +188,25 @@ jobs:
   # job — does NOT gate publish (publish needs: modules), so it can be iterated
   # freely while we settle the cross-build.
   drm-kmod:
-    name: drm-kmod build (drm/i915/amdgpu/radeon, amd64)
+    name: drm-kmod build (${{ matrix.target }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: amd64
+            target_arch: amd64
+          # arm64: drm-kmod's own Makefile lists aarch64 in SUPPORTED_ARCH and
+          # kconfig.mk has an explicit aarch64 branch, so the source tree
+          # supports it -- but the FreeBSD PORT is deliberately narrower
+          # (ONLY_FOR_ARCHS = amd64 powerpc64 powerpc64le), so nobody ships
+          # this combination and it is genuinely unmeasured. That is what this
+          # leg is for. fail-fast is off so an arm64 failure cannot take the
+          # proven amd64 leg down with it.
+          - target: arm64
+            target_arch: aarch64
     container:
-      image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:amd64-${{ (github.event.client_payload.fbsd_sha || inputs.fbsd_sha) && format('fbsd-{0}', github.event.client_payload.fbsd_sha || inputs.fbsd_sha) || 'latest' }}
+      image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:${{ matrix.target }}-${{ (github.event.client_payload.fbsd_sha || inputs.fbsd_sha) && format('fbsd-{0}', github.event.client_payload.fbsd_sha || inputs.fbsd_sha) || 'latest' }}
     steps:
       - name: Download kernel obj tree from kernel continuous release
         env:
@@ -203,7 +218,7 @@ jobs:
           mkdir -p /usr/obj
           gh release download continuous \
             --repo nextbsd-redux/nextbsd-kernel \
-            --pattern "kernel-obj-amd64.tar.gz" \
+            --pattern "kernel-obj-${{ matrix.target }}.tar.gz" \
             --output /tmp/kernel-obj.tar.gz --clobber
           tar -C /usr/obj -xzf /tmp/kernel-obj.tar.gz
 
@@ -217,7 +232,7 @@ jobs:
             echo "Applying $p"
             git apply /tmp/nk/patches/$p
           done
-          cp /tmp/nk/config/NEXTBSD /usr/src/sys/amd64/conf/
+          cp /tmp/nk/config/NEXTBSD /usr/src/sys/${{ matrix.target }}/conf/
 
       - name: Build drm-kmod (6.12-lts) against the kernel obj
         run: |
@@ -227,7 +242,7 @@ jobs:
           cd /usr/src
           ./tools/build/make.py \
             --cross-bindir="${CROSS_BINDIR}" \
-            TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
+            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=NEXTBSD \
             buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod -j${NPROC} SYSDIR=/usr/src/sys"
 
       - name: Collect + list drm-kmod .ko output
@@ -242,16 +257,33 @@ jobs:
           for ko in drm i915kms amdgpu radeonkms ttm; do
             if [ -f "/tmp/ko-out/${ko}.ko" ]; then echo "  OK   ${ko}.ko"; else echo "  MISS ${ko}.ko"; fi
           done
-          # drm.ko + the three drivers are the must-haves; ttm may be folded into drm.
-          for ko in drm i915kms amdgpu radeonkms; do
+          # drm.ko + the GPU drivers are the must-haves; ttm may be folded into drm.
+          #
+          # i915 is required on amd64 and MUST NOT be expected on arm64: drm-kmod's
+          # top-level Makefile adds it to DEFAULT_KMODS only for amd64/i386
+          # (there is no Intel iGPU on aarch64), so its absence there is correct
+          # rather than a build failure. amdgpu and radeonkms ARE expected on both:
+          # discrete AMD cards in an arm64 machine's PCIe slot are a real
+          # configuration, and drm-kmod builds them for aarch64 by default.
+          # What must build is what we SHIP. amd64 ships all four; arm64 ships
+          # the DRM core and helpers only, so drm.ko is the whole requirement
+          # there -- amdgpu/radeonkms still build as drm-kmod defaults and are
+          # reported above, but their state cannot fail a build that does not
+          # package them.
+          if [ "${{ matrix.target }}" = "amd64" ]; then
+            REQUIRED="drm amdgpu radeonkms i915kms"
+          else
+            REQUIRED="drm"
+          fi
+          for ko in $REQUIRED; do
             test -f "/tmp/ko-out/${ko}.ko" || { echo "FAIL: required ${ko}.ko not built" >&2; exit 1; }
           done
-          echo "drm-kmod built drm + i915kms + amdgpu + radeonkms"
+          echo "drm-kmod (${{ matrix.target }}) built: $REQUIRED"
 
       - name: Upload drm-kmod modules artifact
         uses: actions/upload-artifact@v4
         with:
-          name: drm-kmod-modules-amd64
+          name: drm-kmod-modules-${{ matrix.target }}
           path: /tmp/ko-out/*.ko
           if-no-files-found: warn
 
@@ -297,7 +329,7 @@ jobs:
           cd /usr/src
           ./tools/build/make.py \
             --cross-bindir="${CROSS_BINDIR}" \
-            TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
+            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=NEXTBSD \
             buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod/drm_extra_helpers -j${NPROC} SYSDIR=/usr/src/sys" \
             2>&1 | tee /tmp/extra-helpers-build.log
           # Stage next to the drm-kmod .ko's so the wrap step finds it (that
@@ -320,7 +352,12 @@ jobs:
           echo "=== incomplete types ==="
           grep -oE "incomplete type '[^']+'" /tmp/extra-helpers-build.log 2>/dev/null | sort -u | head -30 || true
           echo "=== error count ==="
-          grep -c "error:" /tmp/extra-helpers-build.log 2>/dev/null || echo 0
+          # ": error:" not "error:" -- a bare match also counts the grep
+          # commands echoed into the log by `set -x`/step rendering, which
+          # inflated every count in the first runs and made a clean driver
+          # build read as 4 errors. Compiler diagnostics are always
+          # file:line:col: error:.
+          grep -c ": error:" /tmp/extra-helpers-build.log 2>/dev/null || echo 0
 
       # EXPERIMENTAL (graphics kext series, step 3): bochs, the plan's P0 driver.
       # Binds qemu's DEFAULT -vga std (1234:1111), so it device-matches in CI
@@ -330,6 +367,7 @@ jobs:
       # above fails, because the two failure sets are what we are here to
       # measure and serializing them wastes a CI cycle.
       - name: Build bochs.ko (vendored Linux 6.12 tiny/bochs.c)
+        if: matrix.target == 'amd64'
         continue-on-error: true
         run: |
           set -eu
@@ -340,13 +378,13 @@ jobs:
           cd /usr/src
           ./tools/build/make.py \
             --cross-bindir="${CROSS_BINDIR}" \
-            TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
+            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=NEXTBSD \
             buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod/bochs -j${NPROC} SYSDIR=/usr/src/sys" \
             2>&1 | tee /tmp/bochs-build.log
           cp /tmp/drm-kmod/bochs/bochs.ko /tmp/ko-out/ 2>/dev/null || true
 
       - name: Summarize bochs build gaps
-        if: always()
+        if: always() && matrix.target == 'amd64'
         run: |
           if [ -f /tmp/drm-kmod/bochs/bochs.ko ]; then
             echo "BOCHS-OK: bochs.ko built"; ls -lh /tmp/drm-kmod/bochs/bochs.ko; exit 0
@@ -359,7 +397,12 @@ jobs:
           echo "=== incomplete types ==="
           grep -oE "incomplete type '[^']+'" /tmp/bochs-build.log 2>/dev/null | sort -u | head -30 || true
           echo "=== error count ==="
-          grep -c "error:" /tmp/bochs-build.log 2>/dev/null || echo 0
+          # ": error:" not "error:" -- a bare match also counts the grep
+          # commands echoed into the log by `set -x`/step rendering, which
+          # inflated every count in the first runs and made a clean driver
+          # build read as 4 errors. Compiler diagnostics are always
+          # file:line:col: error:.
+          grep -c ": error:" /tmp/bochs-build.log 2>/dev/null || echo 0
 
       # EXPERIMENTAL (graphics kext series, step 4): vboxvideo (80ee:beef).
       # The cheapest driver in the plan, and cheap because bochs went first --
@@ -374,6 +417,7 @@ jobs:
       # guest status codes; a uapi header on Linux, hence the <linux/...>
       # spelling the -I../include/uapi path reproduces).
       - name: Build vboxvideo.ko (vendored Linux 6.12 vboxvideo/ + lib/genalloc.c)
+        if: matrix.target == 'amd64'
         continue-on-error: true
         run: |
           set -eu
@@ -388,13 +432,13 @@ jobs:
           cd /usr/src
           ./tools/build/make.py \
             --cross-bindir="${CROSS_BINDIR}" \
-            TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=NEXTBSD \
+            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=NEXTBSD \
             buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod/vboxvideo -j${NPROC} SYSDIR=/usr/src/sys" \
             2>&1 | tee /tmp/vboxvideo-build.log
           cp /tmp/drm-kmod/vboxvideo/vboxvideo.ko /tmp/ko-out/ 2>/dev/null || true
 
       - name: Summarize vboxvideo build gaps
-        if: always()
+        if: always() && matrix.target == 'amd64'
         run: |
           if [ -f /tmp/drm-kmod/vboxvideo/vboxvideo.ko ]; then
             echo "VBOX-OK: vboxvideo.ko built"; ls -lh /tmp/drm-kmod/vboxvideo/vboxvideo.ko; exit 0
@@ -411,7 +455,179 @@ jobs:
           echo "=== first 40 error lines ==="
           grep -E "error:" /tmp/vboxvideo-build.log 2>/dev/null | head -40 || true
           echo "=== error count ==="
-          grep -c "error:" /tmp/vboxvideo-build.log 2>/dev/null || echo 0
+          # ": error:" not "error:" -- a bare match also counts the grep
+          # commands echoed into the log by `set -x`/step rendering, which
+          # inflated every count in the first runs and made a clean driver
+          # build read as 4 errors. Compiler diagnostics are always
+          # file:line:col: error:.
+          grep -c ": error:" /tmp/vboxvideo-build.log 2>/dev/null || echo 0
+
+      # EXPERIMENTAL (graphics kext series, step 5): the LinuxKPI virtio shim.
+      #
+      # Runs on BOTH arches, unlike bochs and vboxvideo, because virtio-gpu is
+      # the arm64 KMS story specifically -- qemu's arm64 virt machine has no VGA
+      # device for bochs to bind and VirtualBox guests are x86, so this is the
+      # first graphics work where the arm64 leg is the point rather than a
+      # bonus. It matters equally on amd64: a QEMU/KVM guest gets the same
+      # driver, and the amd64 lane is where it can actually be boot-tested.
+      #
+      # FreeBSD base ships no linuxkpi virtio at all -- sys/compat/linuxkpi has
+      # no <linux/virtio.h> -- so this is the piece the plan spent the longest
+      # assuming would need a base change. It does not: FreeBSD's public
+      # virtqueue KPI already covers the Linux one, with virtqueue_notify()
+      # folding in the kick_prepare decision. The shim is ~600 lines of
+      # BSD-2-Clause code in OUR repo.
+      - name: Build linux_virtio.ko (LinuxKPI virtio shim)
+        continue-on-error: true
+        run: |
+          set -eu
+          mkdir -p /tmp/drm-kmod/include/linux /tmp/drm-kmod/include/uapi/linux
+          cp nbkm-tools/graphics/include/linux/*.h      /tmp/drm-kmod/include/linux/
+          cp nbkm-tools/graphics/include/uapi/linux/*.h /tmp/drm-kmod/include/uapi/linux/
+          cp -R nbkm-tools/graphics/linuxkpi_virtio /tmp/drm-kmod/
+          NPROC=$(nproc)
+          cd /usr/src
+          ./tools/build/make.py \
+            --cross-bindir="${CROSS_BINDIR}" \
+            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=NEXTBSD \
+            buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod/linuxkpi_virtio -j${NPROC} SYSDIR=/usr/src/sys" \
+            2>&1 | tee /tmp/linux-virtio-build.log
+          cp /tmp/drm-kmod/linuxkpi_virtio/linux_virtio.ko /tmp/ko-out/ 2>/dev/null || true
+
+      - name: Summarize virtio shim build gaps
+        if: always()
+        run: |
+          if [ -f /tmp/drm-kmod/linuxkpi_virtio/linux_virtio.ko ]; then
+            echo "VIRTIO-SHIM-OK: linux_virtio.ko built (${{ matrix.target }})"
+            ls -lh /tmp/drm-kmod/linuxkpi_virtio/linux_virtio.ko
+            exit 0
+          fi
+          echo "VIRTIO-SHIM-INCOMPLETE (${{ matrix.target }}) — measured gaps follow"
+          echo "=== missing headers ==="
+          grep -oE "fatal error: '[^']+' file not found" /tmp/linux-virtio-build.log 2>/dev/null | sort -u || true
+          echo "=== undeclared identifiers / implicit decls ==="
+          grep -oE "(use of undeclared identifier|implicit declaration of function) '[^']+'" /tmp/linux-virtio-build.log 2>/dev/null | sort -u | head -60 || true
+          echo "=== incomplete types ==="
+          grep -oE "incomplete type '[^']+'" /tmp/linux-virtio-build.log 2>/dev/null | sort -u | head -30 || true
+          echo "=== conflicting types (the tag-collision class) ==="
+          grep -E "conflicting types|incompatible pointer type" /tmp/linux-virtio-build.log 2>/dev/null | head -20 || true
+          echo "=== first 40 error lines ==="
+          grep -E "error:" /tmp/linux-virtio-build.log 2>/dev/null | head -40 || true
+          echo "=== error count ==="
+          # ": error:" not "error:" -- a bare match also counts the grep
+          # commands echoed into the log by `set -x`/step rendering, which
+          # inflated every count in the first runs and made a clean driver
+          # build read as 4 errors. Compiler diagnostics are always
+          # file:line:col: error:.
+          grep -c ": error:" /tmp/linux-virtio-build.log 2>/dev/null || echo 0
+
+      # EXPERIMENTAL (graphics kext series, step 6): the shmem GEM helpers.
+      #
+      # drm_gem_shmem_helper.c is not in drm-kmod in any form, and
+      # drm_fbdev_shmem.c is present but compiled by nothing there. Six drivers
+      # want this layer (virtio-gpu, Hyper-V, ast, mgag200, cirrus, simpledrm),
+      # so it is built once as its own module.
+      #
+      # Its own module rather than added to drm_extra_helpers on purpose: that
+      # one is required by the boot test (BochsGraphics resolves through
+      # IOGraphicsExtras), so an error in this unproven code must not be able to
+      # take the working driver down with it.
+      - name: Build drm_shmem_helpers.ko (shmem GEM + fbdev)
+        continue-on-error: true
+        run: |
+          set -eu
+          cp nbkm-tools/graphics/drivers/gpu/drm/*.c /tmp/drm-kmod/drivers/gpu/drm/
+          cp nbkm-tools/graphics/include/drm/*.h     /tmp/drm-kmod/include/drm/
+          cp -R nbkm-tools/graphics/drm_shmem_helpers /tmp/drm-kmod/
+          NPROC=$(nproc)
+          cd /usr/src
+          ./tools/build/make.py \
+            --cross-bindir="${CROSS_BINDIR}" \
+            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=NEXTBSD \
+            buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod/drm_shmem_helpers -j${NPROC} SYSDIR=/usr/src/sys" \
+            2>&1 | tee /tmp/shmem-helpers-build.log
+          cp /tmp/drm-kmod/drm_shmem_helpers/drm_shmem_helpers.ko /tmp/ko-out/ 2>/dev/null || true
+
+      - name: Summarize shmem helper build gaps
+        if: always()
+        run: |
+          if [ -f /tmp/drm-kmod/drm_shmem_helpers/drm_shmem_helpers.ko ]; then
+            echo "SHMEM-OK: drm_shmem_helpers.ko built (${{ matrix.target }})"
+            ls -lh /tmp/drm-kmod/drm_shmem_helpers/drm_shmem_helpers.ko
+            exit 0
+          fi
+          echo "SHMEM-INCOMPLETE (${{ matrix.target }}) — measured gaps follow"
+          echo "=== missing headers ==="
+          grep -oE "fatal error: '[^']+' file not found" /tmp/shmem-helpers-build.log 2>/dev/null | sort -u || true
+          echo "=== undeclared identifiers / implicit decls ==="
+          grep -oE "(use of undeclared identifier|implicit declaration of function) '[^']+'" /tmp/shmem-helpers-build.log 2>/dev/null | sort -u | head -60 || true
+          echo "=== incomplete types ==="
+          grep -oE "incomplete type '[^']+'" /tmp/shmem-helpers-build.log 2>/dev/null | sort -u | head -30 || true
+          echo "=== first 40 error lines ==="
+          grep -E "error:" /tmp/shmem-helpers-build.log 2>/dev/null | head -40 || true
+          echo "=== error count ==="
+          # ": error:" not "error:" -- a bare match also counts the grep
+          # commands echoed into the log by `set -x`/step rendering, which
+          # inflated every count in the first runs and made a clean driver
+          # build read as 4 errors. Compiler diagnostics are always
+          # file:line:col: error:.
+          grep -c ": error:" /tmp/shmem-helpers-build.log 2>/dev/null || echo 0
+
+      # EXPERIMENTAL (graphics kext series, step 7): the driver itself.
+      #
+      # ~5,100 lines vendored from Linux v6.12, MIT-licensed apart from
+      # virtgpu_vram.c, which is not built (blob resources need a get_shm_region
+      # bus method FreeBSD's virtio bus does not implement).
+      #
+      # Depends on all three companion modules: linux_virtio.ko, the shmem
+      # helpers above, and drm_extra_helpers.ko for drm_simple_encoder_init and
+      # drm_gem_fb_create_handle. Runs even when any of them fails, because the
+      # separate failure sets are what these steps exist to measure and
+      # serializing them wastes a CI cycle.
+      - name: Build virtio_gpu_drm.ko (vendored Linux 6.12 virtio/)
+        continue-on-error: true
+        run: |
+          set -eu
+          mkdir -p /tmp/drm-kmod/drivers/gpu/drm/virtio
+          cp nbkm-tools/graphics/drivers/gpu/drm/virtio/* /tmp/drm-kmod/drivers/gpu/drm/virtio/
+          cp -R nbkm-tools/graphics/virtio_gpu_drm /tmp/drm-kmod/
+          NPROC=$(nproc)
+          cd /usr/src
+          ./tools/build/make.py \
+            --cross-bindir="${CROSS_BINDIR}" \
+            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=NEXTBSD \
+            buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod/virtio_gpu_drm -j${NPROC} SYSDIR=/usr/src/sys" \
+            2>&1 | tee /tmp/virtio-gpu-build.log
+          cp /tmp/drm-kmod/virtio_gpu_drm/virtio_gpu_drm.ko /tmp/ko-out/ 2>/dev/null || true
+
+      - name: Summarize virtio-gpu build gaps
+        if: always()
+        run: |
+          if [ -f /tmp/drm-kmod/virtio_gpu_drm/virtio_gpu_drm.ko ]; then
+            echo "VIRTIO-GPU-OK: virtio_gpu_drm.ko built (${{ matrix.target }})"
+            ls -lh /tmp/drm-kmod/virtio_gpu_drm/virtio_gpu_drm.ko
+            exit 0
+          fi
+          echo "VIRTIO-GPU-INCOMPLETE (${{ matrix.target }}) — measured gaps follow"
+          echo "=== missing headers ==="
+          grep -oE "fatal error: '[^']+' file not found" /tmp/virtio-gpu-build.log 2>/dev/null | sort -u || true
+          echo "=== undeclared identifiers / implicit decls ==="
+          grep -oE "(use of undeclared identifier|implicit declaration of function) '[^']+'" /tmp/virtio-gpu-build.log 2>/dev/null | sort -u | head -80 || true
+          echo "=== incomplete types ==="
+          grep -oE "incomplete type '[^']+'" /tmp/virtio-gpu-build.log 2>/dev/null | sort -u | head -30 || true
+          echo "=== undefined symbols at link ==="
+          grep -oE "undefined symbol: [A-Za-z0-9_]+" /tmp/virtio-gpu-build.log 2>/dev/null | sort -u | head -40 || true
+          echo "=== per-file error counts (which layer is the cost) ==="
+          grep -oE "virtgpu_[a-z_]+\.c" /tmp/virtio-gpu-build.log 2>/dev/null | sort | uniq -c | sort -rn | head -20 || true
+          echo "=== first 40 error lines ==="
+          grep -E "error:" /tmp/virtio-gpu-build.log 2>/dev/null | head -40 || true
+          echo "=== error count ==="
+          # ": error:" not "error:" -- a bare match also counts the grep
+          # commands echoed into the log by `set -x`/step rendering, which
+          # inflated every count in the first runs and made a clean driver
+          # build read as 4 errors. Compiler diagnostics are always
+          # file:line:col: error:.
+          grep -c ": error:" /tmp/virtio-gpu-build.log 2>/dev/null || echo 0
 
       - name: Generate graphics IOKitPersonalities from drm-kmod source
         run: |
@@ -425,21 +641,39 @@ jobs:
           I915C=$(find /tmp/drm-kmod -path '*gpu/drm/i915/i915_pci.c'  | head -1)
           AMDC=$(find /tmp/drm-kmod -path '*amd/amdgpu/amdgpu_drv.c' | head -1)
           DRMP=$(find /tmp/drm-kmod -name drm_pciids.h | head -1)
-          test -f "$I915H" || { echo "i915_pciids.h not found in drm-kmod" >&2; exit 1; }
-          test -f "$I915C" || { echo "i915_pci.c not found in drm-kmod" >&2; exit 1; }
+          # Every matched-GPU kext is amd64-only. arm64 ships the DRM core and
+          # helpers only -- the drivers that would use these id tables either
+          # cannot load there (amdgpu) or serve hardware an ARM VM does not have
+          # (radeon: a discrete card in a physical PCIe slot). Generating them
+          # would produce match tables for kexts that are never packaged.
+          if [ "${{ matrix.target }}" != "amd64" ]; then
+            echo "==> ${{ matrix.target }}: no vendor-GPU personalities (core + helpers only)"
+          else
           test -f "$AMDC"  || { echo "amdgpu_drv.c not found in drm-kmod" >&2; exit 1; }
           test -f "$DRMP"  || { echo "drm_pciids.h not found in drm-kmod" >&2; exit 1; }
-          # 6.12 (#337): i915 ids come from the driver's pciidlist[] in i915_pci.c,
-          # preprocessor-expanded via the header (the flat INTEL_VGA_DEVICE(0x..)
-          # literals are gone). gen-i915 now takes both files.
-          "$T/gen-i915-personalities.sh"   "$I915H" "$I915C" org.nextbsd.kext.intelgraphics IntelGraphics  > pers/IntelGraphics.iokitpersonalities
-          # Count-band gate: pciidlist expansion yields ~364 ids on 6.12-lts. An
-          # empty/tiny table means the extraction silently broke on a header change.
-          NIG=$(grep -oE '0x[0-9a-f]{8}' pers/IntelGraphics.iokitpersonalities | sort -u | wc -l | tr -d ' ')
-          [ "$NIG" -ge 300 ] && [ "$NIG" -le 450 ] || { echo "i915 id count $NIG out of band [300,450] — pciidlist extraction likely broke" >&2; exit 1; }
+          # i915 is amd64-only: drm-kmod adds it to DEFAULT_KMODS for amd64/i386
+          # only, so on arm64 there is no i915kms.ko to carry these ids and
+          # generating them would produce a kext matching hardware that
+          # architecture does not have.
+          if [ "${{ matrix.target }}" = "amd64" ]; then
+            test -f "$I915H" || { echo "i915_pciids.h not found in drm-kmod" >&2; exit 1; }
+            test -f "$I915C" || { echo "i915_pci.c not found in drm-kmod" >&2; exit 1; }
+            # 6.12 (#337): i915 ids come from the driver's pciidlist[] in i915_pci.c,
+            # preprocessor-expanded via the header (the flat INTEL_VGA_DEVICE(0x..)
+            # literals are gone). gen-i915 now takes both files.
+            "$T/gen-i915-personalities.sh"   "$I915H" "$I915C" org.nextbsd.kext.intelgraphics IntelGraphics  > pers/IntelGraphics.iokitpersonalities
+            # Count-band gate: pciidlist expansion yields ~364 ids on 6.12-lts. An
+            # empty/tiny table means the extraction silently broke on a header change.
+            NIG=$(grep -oE '0x[0-9a-f]{8}' pers/IntelGraphics.iokitpersonalities | sort -u | wc -l | tr -d ' ')
+            [ "$NIG" -ge 300 ] && [ "$NIG" -le 450 ] || { echo "i915 id count $NIG out of band [300,450] — pciidlist extraction likely broke" >&2; exit 1; }
+          fi
           "$T/gen-amdgpu-personalities.sh" "$AMDC"  org.nextbsd.kext.amdgraphics   AMDGraphics    > pers/AMDGraphics.iokitpersonalities
           # De-overlap: radeon yields SI/CIK to amdgpu (this build compiles amdgpu
           # WITH CONFIG_DRM_AMDGPU_SI/_CIK), so feed amdgpu's match words to -x.
+          # The -x de-overlap exists because amdgpu CLAIMS the SI/CIK ids on this
+          # build (it compiles with CONFIG_DRM_AMDGPU_SI/_CIK), so radeon must
+          # not also claim them. Both kexts are amd64-only, so this whole
+          # pairing is too -- see the wrap step for why arm64 ships neither.
           grep -oE '0x[0-9a-f]{8}' pers/AMDGraphics.iokitpersonalities | sort -u > pers/amdgpu-match.txt
           "$T/gen-radeon-personalities.sh" -x pers/amdgpu-match.txt "$DRMP" org.nextbsd.kext.radeongraphics RadeonGraphics > pers/RadeonGraphics.iokitpersonalities
           # bochs (graphics kext series): ids come from the vendored driver's own
@@ -455,6 +689,17 @@ jobs:
             chmod +x "$T/gen-vboxvideo-personalities.sh"
             "$T/gen-vboxvideo-personalities.sh" /tmp/drm-kmod/drivers/gpu/drm/vboxvideo/vbox_drv.c \
                 org.nextbsd.kext.vboxgraphics VBoxGraphics > pers/VBoxGraphics.iokitpersonalities
+          fi
+          fi
+          # virtio-gpu: generated on BOTH arches, which is why it sits outside
+          # the amd64-only block above. It is also the only generator here whose
+          # input is a header rather than a driver's pci table -- virtio-gpu
+          # matches by virtio device TYPE and the PCI id is derived from it.
+          # See tools/gen-virtio-gpu-personalities.sh.
+          if [ -f /tmp/ko-out/virtio_gpu_drm.ko ]; then
+            chmod +x "$T/gen-virtio-gpu-personalities.sh"
+            "$T/gen-virtio-gpu-personalities.sh" nbkm-tools/graphics/include/linux/virtio_ids.h \
+                org.nextbsd.kext.virtiographics VirtIOGraphics > pers/VirtIOGraphics.iokitpersonalities
           fi
           echo "=== device-id counts ==="
           for f in pers/IntelGraphics AMDGraphics RadeonGraphics; do : ; done
@@ -477,15 +722,62 @@ jobs:
           "$K" -o "$O" -l org.nextbsd.kext.iographics "$KO/ttm.ko" TTM org.nextbsd.kext.ttm
           # Per-vendor GPU kexts: depend on the drm core, carry their own device-id
           # match table. (Firmware bundling — ko2kext -f — is the next step.)
-          "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.ttm \
-               -p pers/IntelGraphics.iokitpersonalities \
-               "$KO/i915kms.ko" IntelGraphics org.nextbsd.kext.intelgraphics
-          "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.ttm -l org.nextbsd.kext.dmabuf \
-               -p pers/AMDGraphics.iokitpersonalities \
-               "$KO/amdgpu.ko" AMDGraphics org.nextbsd.kext.amdgraphics
-          "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.ttm \
-               -p pers/RadeonGraphics.iokitpersonalities \
-               "$KO/radeonkms.ko" RadeonGraphics org.nextbsd.kext.radeongraphics
+          # IntelGraphics only where i915 exists (amd64); see the personalities
+          # step. Guarded on the .ko rather than on matrix.target so the two
+          # cannot drift apart.
+          if [ -f "$KO/i915kms.ko" ]; then
+            "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.ttm \
+                 -p pers/IntelGraphics.iokitpersonalities \
+                 "$KO/i915kms.ko" IntelGraphics org.nextbsd.kext.intelgraphics
+          fi
+          # arm64 ships the DRM core and helpers ONLY. Neither AMD kext is
+          # packaged there, for two different reasons:
+          #
+          #   AMDGraphics     CANNOT work -- upstream drm-kmod cannot produce a
+          #                   loadable amdgpu.ko on aarch64 (see below).
+          #   RadeonGraphics  builds and resolves fine, but only ever matches a
+          #                   discrete AMD card in a physical PCIe slot, which
+          #                   is not what an ARM VM presents. Shipping it would
+          #                   add a kext no arm64 target can use.
+          #
+          # The arm64 KMS story is a driver that binds what an ARM VM actually
+          # has -- see nextbsd-arm64-kms-options.html.
+          #
+          # On the AMDGraphics side specifically, this is NOT by choice.
+          # kconfig.mk gates
+          # DRM_AMD_DC_FP behind `.if ${MACHINE_CPUARCH} == "amd64"`, which drops
+          # the Display Core floating-point source block from amd/amdgpu/Makefile
+          # -- but the references to those symbols are compiled unconditionally.
+          # The result builds clean and then fails kldload with ENOEXEC on five
+          # undefined symbols:
+          #
+          #   dal_hw_factory_dcn401_init      dal_hw_translate_dcn401_init
+          #   dscl2_spl_calc_lb_num_partitions   dscl32_spl_calc_lb_num_partitions
+          #   dscl401_spl_calc_lb_num_partitions
+          #
+          # Found by tools/check-kext-symbols.py on this job's first arm64 run.
+          # Deleting this guard is the test for whether upstream has fixed it:
+          # the symbol gate will fail the build again if not.
+          #
+          # radeonkms has no such gap -- it builds and resolves cleanly on
+          # aarch64 -- but it is not packaged there either, for a separate
+          # reason: it only ever matches a discrete AMD card in a physical PCIe
+          # slot, which an ARM VM does not present. amd64 ships both kexts
+          # exactly as before.
+          if [ "${{ matrix.target }}" = "amd64" ]; then
+            "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.ttm -l org.nextbsd.kext.dmabuf \
+                 -p pers/AMDGraphics.iokitpersonalities \
+                 "$KO/amdgpu.ko" AMDGraphics org.nextbsd.kext.amdgraphics
+          else
+            echo "==> AMDGraphics.kext SKIPPED on ${{ matrix.target }}: upstream amdgpu.ko is unloadable there (DRM_AMD_DC_FP is amd64-only)"
+          fi
+          if [ "${{ matrix.target }}" = "amd64" ]; then
+            "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.ttm \
+                 -p pers/RadeonGraphics.iokitpersonalities \
+                 "$KO/radeonkms.ko" RadeonGraphics org.nextbsd.kext.radeongraphics
+          else
+            echo "==> RadeonGraphics.kext SKIPPED on ${{ matrix.target }}: matches only discrete PCIe cards, which an ARM VM does not present"
+          fi
           # Graphics kext series: the shared helper module first (bochs depends
           # on it), then bochs itself with its device-match personalities.
           if [ -f "$KO/drm_extra_helpers.ko" ]; then
@@ -505,6 +797,37 @@ jobs:
                  -l org.nextbsd.kext.iographicsextras \
                  -p pers/VBoxGraphics.iokitpersonalities \
                  "$KO/vboxvideo.ko" VBoxGraphics org.nextbsd.kext.vboxgraphics
+          fi
+          # virtio-gpu, on BOTH arches -- the only graphics driver here that is
+          # not amd64-only, because it is the sole KMS candidate an arm64 VM
+          # can present at all.
+          #
+          # Three bundles, because the two companion modules are shared layers
+          # rather than parts of this driver: LinuxVirtIO is the virtio shim
+          # (the next virtio driver ported here needs the same one) and
+          # IOGraphicsShmem is the shmem GEM layer (ast, mgag200, cirrus,
+          # Hyper-V and simpledrm all sit on it).
+          #
+          # Note the dependency shape differs from bochs/vboxvideo: NO TTM.
+          # Those are VRAM-helper drivers whose buffers live in a device BAR;
+          # virtio-gpu's live in swap-backed system memory, which is exactly
+          # why it sidesteps the fictitious-range problem. Linking TTM here
+          # would declare a dependency the driver does not have.
+          if [ -f "$KO/linux_virtio.ko" ]; then
+            "$K" -o "$O" -l org.nextbsd.kext.dmabuf \
+                 "$KO/linux_virtio.ko" LinuxVirtIO org.nextbsd.kext.linuxvirtio
+          fi
+          if [ -f "$KO/drm_shmem_helpers.ko" ]; then
+            "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.dmabuf \
+                 "$KO/drm_shmem_helpers.ko" IOGraphicsShmem org.nextbsd.kext.iographicsshmem
+          fi
+          if [ -f "$KO/virtio_gpu_drm.ko" ] && [ -f pers/VirtIOGraphics.iokitpersonalities ]; then
+            "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.dmabuf \
+                 -l org.nextbsd.kext.iographicsextras \
+                 -l org.nextbsd.kext.iographicsshmem \
+                 -l org.nextbsd.kext.linuxvirtio \
+                 -p pers/VirtIOGraphics.iokitpersonalities \
+                 "$KO/virtio_gpu_drm.ko" VirtIOGraphics org.nextbsd.kext.virtiographics
           fi
           echo "=== built kexts ==="
           for d in "$O"/*.kext; do echo "  $(basename "$d") ($(du -sh "$d" | cut -f1))"; done
@@ -534,11 +857,22 @@ jobs:
             'DMABuf':         ('org.nextbsd.kext.dmabuf', None, []),
             'IOGraphics':     ('org.nextbsd.kext.iographics', None, ['org.nextbsd.kext.dmabuf']),
             'TTM':            ('org.nextbsd.kext.ttm', None, ['org.nextbsd.kext.iographics']),
-            'IntelGraphics':  ('org.nextbsd.kext.intelgraphics', '8086', ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm']),
-            'AMDGraphics':    ('org.nextbsd.kext.amdgraphics', '1002', ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm','org.nextbsd.kext.dmabuf']),
-            'RadeonGraphics': ('org.nextbsd.kext.radeongraphics', '1002', ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm']),
           }
           import os
+          # IntelGraphics is amd64-only (drm-kmod builds i915 for amd64/i386
+          # only), so it is checked exactly like the other optional kexts
+          # rather than assumed present -- on the arm64 leg it does not exist.
+          # AMDGraphics is absent on arm64 (see the wrap step: upstream amdgpu.ko
+          # cannot load there), so it is checked only when it shipped.
+          if os.path.exists('kexts/RadeonGraphics.kext'):
+              checks['RadeonGraphics'] = ('org.nextbsd.kext.radeongraphics', '1002',
+                                          ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm'])
+          if os.path.exists('kexts/AMDGraphics.kext'):
+              checks['AMDGraphics'] = ('org.nextbsd.kext.amdgraphics', '1002',
+                                       ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm','org.nextbsd.kext.dmabuf'])
+          if os.path.exists('kexts/IntelGraphics.kext'):
+              checks['IntelGraphics'] = ('org.nextbsd.kext.intelgraphics', '8086',
+                                         ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm'])
           # Graphics kext series. Guarded on existence so the gate stays green
           # while the experimental builds are iterated. IOGraphicsExtras carries
           # no personalities (it is a library other drivers link against);
@@ -560,6 +894,22 @@ jobs:
               checks['VBoxGraphics'] = ('org.nextbsd.kext.vboxgraphics', '80ee',
                                         ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm',
                                          'org.nextbsd.kext.iographicsextras'])
+          # The virtio-gpu trio, present on both arches. Note the deps: no TTM,
+          # because these are swap-backed rather than VRAM-backed, and asserting
+          # the absence is as much the point as asserting the presence -- a
+          # spurious TTM edge would be a dependency the driver does not have.
+          if os.path.exists('kexts/LinuxVirtIO.kext'):
+              checks['LinuxVirtIO'] = ('org.nextbsd.kext.linuxvirtio', None,
+                                       ['org.nextbsd.kext.dmabuf'])
+          if os.path.exists('kexts/IOGraphicsShmem.kext'):
+              checks['IOGraphicsShmem'] = ('org.nextbsd.kext.iographicsshmem', None,
+                                           ['org.nextbsd.kext.iographics','org.nextbsd.kext.dmabuf'])
+          if os.path.exists('kexts/VirtIOGraphics.kext'):
+              checks['VirtIOGraphics'] = ('org.nextbsd.kext.virtiographics', '1af4',
+                                          ['org.nextbsd.kext.iographics','org.nextbsd.kext.dmabuf',
+                                           'org.nextbsd.kext.iographicsextras',
+                                           'org.nextbsd.kext.iographicsshmem',
+                                           'org.nextbsd.kext.linuxvirtio'])
           def load(n):
               return plistlib.load(open(f'kexts/{n}.kext/Contents/Info.plist','rb'))
           for name,(bid,vendor,deps) in checks.items():
@@ -599,8 +949,10 @@ jobs:
           # Fold the virtual-GPU drivers into the same rule as they appear. Two
           # drivers claiming one id is the failure that makes a machine bind the
           # wrong driver, and it costs nothing to assert across the full set.
-          virt=[n for n in ('BochsGraphics','VBoxGraphics') if n in checks]
-          allmatched=['AMDGraphics','RadeonGraphics','IntelGraphics']+virt
+          # Build the list from what actually shipped: IntelGraphics is absent on
+          # arm64, and the virtual-GPU kexts are amd64-only too.
+          allmatched=[n for n in ('AMDGraphics','RadeonGraphics','IntelGraphics',
+                                  'BochsGraphics','VBoxGraphics','VirtIOGraphics') if n in checks]
           pairs=[(a,b) for i,a in enumerate(allmatched) for b in allmatched[i+1:]]
           for a,b in pairs:
               o=ids(a)&ids(b)
@@ -611,7 +963,7 @@ jobs:
       - name: Upload graphics kexts artifact
         uses: actions/upload-artifact@v4
         with:
-          name: graphics-kexts-amd64
+          name: graphics-kexts-${{ matrix.target }}
           path: kexts/**
 
   # Prove the graphics-kext IOKitPersonalities generators (i915/amdgpu/radeon) on
@@ -832,6 +1184,24 @@ jobs:
                 echo "==> VBoxGraphics.kext injected"
               else
                 echo "==> VBoxGraphics.kext absent — VBOX stages will be skipped"
+              fi
+              # The virtio-gpu trio. Optional like VBoxGraphics so an iterating
+              # build cannot take the proven bochs path down -- but unlike
+              # VBoxGraphics these can actually BIND here, because the qemu
+              # invocation carries -device virtio-gpu-pci. All three are needed:
+              # VirtIOGraphics resolves through LinuxVirtIO (the virtio shim)
+              # and IOGraphicsShmem (the shmem GEM layer).
+              virtio_missing=""
+              for k in LinuxVirtIO IOGraphicsShmem VirtIOGraphics; do
+                [ -d "$GFXDIR/$k.kext" ] || { virtio_missing="$virtio_missing $k"; continue; }
+                cp -R "$GFXDIR/$k.kext" /mnt-root/System/Library/Extensions/
+                chown -R root:wheel /mnt-root/System/Library/Extensions/$k.kext
+                chmod -R go-w /mnt-root/System/Library/Extensions/$k.kext
+              done
+              if [ -n "$virtio_missing" ]; then
+                echo "==> virtio-gpu kexts absent —$virtio_missing — VIRTIO stages will be skipped"
+              else
+                echo "==> virtio-gpu kexts injected (LinuxVirtIO, IOGraphicsShmem, VirtIOGraphics)"
               fi
               if [ -n "$missing" ]; then
                 echo "==> INCOMPLETE graphics stack (missing:$missing) — graphics stages will be skipped"

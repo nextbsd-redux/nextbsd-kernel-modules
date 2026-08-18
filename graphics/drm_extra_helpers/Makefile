@@ -21,6 +21,14 @@
 #
 #   drm_format_helper.c       format conversion + conv_state  (shadow planes)
 #
+# The shmem GEM helpers are NOT here, in a companion module instead
+# (graphics/drm_shmem_helpers). They belong to the same category and the
+# instinct is to add them to this list, but this module is load-bearing: the
+# boot test requires IOGraphicsExtras.kext, because BochsGraphics resolves
+# through it. Folding an unproven ~780-line helper into it means a compile
+# error in the new code takes down the driver that already works. Separate
+# modules, separate blast radius.
+#
 # drm_format_helper.c is NOT vendored: drm-kmod already carries a FreeBSD-adapted
 # copy at drivers/gpu/drm/, which .PATH picks up. It is listed here because
 # drm-kmod compiles it into NOTHING -- the file sits in the tree with its

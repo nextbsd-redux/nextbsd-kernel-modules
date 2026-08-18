@@ -67,6 +67,21 @@ set timeout 480
 log_file -a tests/kext-boot.log
 log_user 1
 
+# Diagnostics must not inherit the 480s stage timeout. Every
+# `expect { timeout {} -re {[#%$] $} {} }` is a silent wait: if the prompt does
+# not match, it burns the FULL stage timeout and prints nothing to say why.
+# With a handful of them that is most of an hour of CI spent waiting for
+# nothing, which is exactly what stretched this job past its 24-minute
+# baseline. Diagnostics are best-effort by definition, so they get seconds.
+proc diag {cmd} {
+    global timeout
+    set save $timeout
+    set timeout 20
+    send "$cmd\r"
+    expect { timeout { } -re {[#%$] $} { } }
+    set timeout $save
+}
+
 set img [lindex $argv 0]
 set accel_flags [split $env(ACCEL_FLAGS) " "]
 set kext $env(KEXT_PATH)
@@ -81,6 +96,7 @@ eval spawn qemu-system-x86_64 \
     $accel_flags \
     -drive file=$img,format=raw,if=virtio \
     -nic user,model=e1000 \
+    -device virtio-gpu-pci \
     -display none -serial stdio \
     -no-reboot
 
@@ -150,8 +166,7 @@ if {$gfx_test} {
         puts "\nOK: GFX-AUTOLOAD -- card0 appeared with no kextload (match -> kextd -> bind), after [expr {$i * 3}]s"
     } else {
         puts "\nFAIL: GFX-AUTOLOAD -- no card0 within 60s of reaching a shell"
-        send "tail -15 /var/log/kextd.log 2>&1\r"
-        expect { timeout {} -re {[#%$] $} {} }
+        diag "tail -15 /var/log/kextd.log 2>&1"
     }
 }
 
@@ -233,8 +248,8 @@ if {$gfx_test} {
                 puts "\nFAIL: GFX-LOAD $k errored: $expect_out(0,string)"
                 # Dump why before bailing: a bare ENOEXEC says nothing, and a
                 # second CI cycle to learn it costs 20 minutes.
-                send "kldstat\r"; expect { timeout {} -re {[#%$] $} {} }
-                send "dmesg | tail -25\r"; expect { timeout {} -re {[#%$] $} {} }
+                diag "/sbin/kldstat"
+                diag "dmesg | tail -25"
                 exit 1
             }
             -re "not a bundle" { puts "\nFAIL: GFX-LOAD $k is not a readable bundle"; exit 1 }
@@ -282,8 +297,8 @@ if {$gfx_test} {
             "already loaded"   { puts "\nOK: VBOX-LOAD VBoxGraphics (already loaded)" }
             -re {kldload\([^\n]*\n} {
                 puts "\nFAIL: VBOX-LOAD errored: $expect_out(0,string)"
-                send "kldstat\r"; expect { timeout {} -re {[#%$] $} {} }
-                send "dmesg | tail -25\r"; expect { timeout {} -re {[#%$] $} {} }
+                diag "/sbin/kldstat"
+                diag "dmesg | tail -25"
                 exit 1
             }
             -re "not a bundle" { puts "\nFAIL: VBOX-LOAD VBoxGraphics is not a readable bundle"; exit 1 }
@@ -296,26 +311,109 @@ if {$gfx_test} {
         # match "BochsGraphics"; grepping for vboxvideo here found nothing and
         # reported a resident module as missing. Both spellings are accepted so
         # this keeps working if kextstat ever reports the module name instead.
-        send "kextstat | grep -iE 'vboxgraphics|vboxvideo'\r"
-        expect { timeout { } -re {[#%$] $} { } }
+        diag "kextstat | grep -iE 'vboxgraphics|vboxvideo'"
         send "kextstat | grep -qiE 'vboxgraphics|vboxvideo' && echo VBOX''_PRESENT || echo VBOX''_ABSENT\r"
         expect {
             timeout { puts "\nFAIL: VBOX-STAT timed out"; exit 1 }
             "VBOX_ABSENT"  {
                 puts "\nFAIL: VBoxGraphics loaded but absent from kextstat"
-                send "kextstat\r"; expect { timeout {} -re {[#%$] $} {} }
-                send "kldstat\r"; expect { timeout {} -re {[#%$] $} {} }
+                diag "kextstat"
+                diag "/sbin/kldstat"
                 exit 1
             }
             "VBOX_PRESENT" { puts "\nOK: VBOX-STAT (vboxvideo resident; no bind expected in qemu)" }
         }
     }
 
+    # -----------------------------------------------------------------------
+    # Stage 13: virtio-gpu. Unlike VBoxGraphics this one CAN bind -- the qemu
+    # invocation above adds -device virtio-gpu-pci, so 1af4:1050 is present.
+    #
+    # virtio-gpu-pci deliberately, not virtio-vga: the -pci form presents
+    # display class "other" rather than VGA, so it does not own the legacy
+    # aperture and does not contest the console with bochs. Both drivers can
+    # therefore be exercised in one boot, with bochs on card0 and virtio-gpu
+    # taking the next minor.
+    #
+    # This is also the first stage that tests a driver binding through a bus
+    # OTHER than raw PCI: IOPCIPrimaryMatch only gets the kext loaded, and
+    # newbus then attaches it as a child of virtio_pci.
+    # -----------------------------------------------------------------------
+    send "test -d /System/Library/Extensions/VirtIOGraphics.kext && echo VIRTIO''_KEXT_YES || echo VIRTIO''_KEXT_NO\r"
+    set virtio_present 0
+    expect {
+        timeout { puts "\nWARN: VIRTIO-PRESENT probe timed out" }
+        "VIRTIO_KEXT_YES" { set virtio_present 1 }
+        "VIRTIO_KEXT_NO"  { puts "\nSKIP: VirtIOGraphics.kext not in this image" }
+    }
+
+    if {$virtio_present} {
+        # Before loading anything: has devmatch already autoloaded BASE's
+        # virtio_gpu(4) for this device? Both claim virtio device type 16, and
+        # whichever attaches first owns it -- base's also registers above efifb
+        # at VD_PRIORITY_GENERIC+10, which is why standing decision V7 keeps it
+        # out of kernel configs. If it won the race, our attach cannot happen
+        # and the reason would otherwise look like an unexplained bind failure.
+        # Echo-split sentinels on BOTH arms. The first version of this probe
+        # matched -re {virtio_gpu[^\n]*\n}, which matched the ECHOED COMMAND
+        # rather than its output and reported a devmatch race that was not
+        # happening -- the real answer, ABSENT, arrived a line later. The rest
+        # of this file already uses the STAT''_* convention for exactly this
+        # reason; the probe simply did not follow it.
+        send "/sbin/kldstat | grep -i virtio_gpu | grep -vi virtio_gpu_drm | grep -q . && echo BASE''_VIRTIO_GPU_YES || echo BASE''_VIRTIO_GPU_NO\r"
+        expect {
+            timeout { puts "\nWARN: BASE-VIRTIO-GPU probe timed out" }
+            "BASE_VIRTIO_GPU_NO"  { puts "\nOK: base virtio_gpu(4) not resident (no devmatch race)" }
+            "BASE_VIRTIO_GPU_YES" { puts "\nWARN: base virtio_gpu(4) IS resident -- it may already own the device" }
+        }
+
+        # Dependency order, so a failure names the layer rather than the leaf.
+        foreach k {LinuxVirtIO IOGraphicsShmem VirtIOGraphics} {
+            send "kextload /System/Library/Extensions/$k.kext\r"
+            expect {
+                timeout { puts "\nFAIL: VIRTIO-LOAD $k timed out"; exit 1 }
+                "kextload: loaded" { puts "\nOK: VIRTIO-LOAD $k" }
+                "already loaded"   { puts "\nOK: VIRTIO-LOAD $k (already loaded)" }
+                -re {kldload\([^\n]*\n} {
+                    puts "\nFAIL: VIRTIO-LOAD $k errored: $expect_out(0,string)"
+                    diag "/sbin/kldstat"
+                    diag "dmesg | tail -30"
+                    exit 1
+                }
+                -re "not a bundle" { puts "\nFAIL: VIRTIO-LOAD $k is not a readable bundle"; exit 1 }
+            }
+        }
+
+        # Resident. Match the BUNDLE name -- kldstat lists the bundle binary
+        # (VirtIOGraphics), never the KMOD name inside it (virtio_gpu_drm).
+        send "kextstat | grep -qiE 'virtiographics|virtio_gpu_drm' && echo VIRTIO''_PRESENT || echo VIRTIO''_ABSENT\r"
+        expect {
+            timeout { puts "\nFAIL: VIRTIO-STAT timed out"; exit 1 }
+            "VIRTIO_ABSENT"  { puts "\nFAIL: VirtIOGraphics loaded but absent from kextstat"; exit 1 }
+            "VIRTIO_PRESENT" { puts "\nOK: VIRTIO-STAT (virtio_gpu_drm resident)" }
+        }
+
+        # It BOUND. bochs already holds card0, so a second DRM minor is the
+        # evidence that virtio-gpu attached and brought KMS up. Asserted by
+        # counting nodes rather than naming card1, so this stays true if minor
+        # allocation ever changes order.
+        diag "ls /dev/dri/card* 2>/dev/null | wc -l"
+        send "test \$(ls /dev/dri/card* 2>/dev/null | wc -l) -ge 2 && echo VIRTIO''_CARD_YES || echo VIRTIO''_CARD_NO\r"
+        expect {
+            timeout { puts "\nFAIL: VIRTIO-CARD timed out"; exit 1 }
+            "VIRTIO_CARD_YES" { puts "\nOK: VIRTIO-CARD (second DRM node -- virtio-gpu bound and KMS is up)" }
+            "VIRTIO_CARD_NO"  {
+                puts "\nFAIL: VIRTIO-CARD -- virtio-gpu loaded but published no DRM node"
+                diag "dmesg | grep -iE 'virtio|drm' | tail -30"
+                diag "pciconf -lv | grep -A3 -i virtio"
+                exit 1
+            }
+        }
+    }
+
     # Stage 12: diagnostics either way -- attach lines and any drm complaint.
-    send "dmesg | grep -iE 'bochs|vboxvideo|drm|vgapci' | tail -20\r"
-    expect { timeout { } -re {[#%$] $} { } }
-    send "ls -l /dev/dri 2>&1 | head -5\r"
-    expect { timeout { } -re {[#%$] $} { } }
+    diag "dmesg | grep -iE 'bochs|vboxvideo|virtio|drm|vgapci' | tail -30"
+    diag "ls -l /dev/dri 2>&1 | head -8"
 }
 
 puts "\nKEXT-POC-OK: Nmdm load/stat/unload + IntelWiFi load/stat all passed"
