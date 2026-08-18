@@ -44,8 +44,19 @@ KMOD=	drm_shmem_helpers
 
 EXPORT_SYMS=	YES
 
+# MEASUREMENT (not for merge): build drm_fbdev_shmem.c to get the CURRENT error
+# list against today's drm-kmod, so the fbdev work is scoped against facts rather
+# than the "8 of 15 errors" note from the first CI run. The step is
+# continue-on-error with an always-run gap summarizer, so this cannot fail CI.
+#
+# Why it matters now: the comment above assumes "the console stays on efifb",
+# which is false on arm64 -- qemu/OVMF's virtio GOP is Blt-only, and Apple's
+# Virtualization.framework publishes NO GOP at all ("gop: Graphics Output
+# Protocol not present" at the loader). With no efifb anywhere, this fbdev is
+# the only console a virtio-gpu guest can have once the kext owns the device.
 SRCS=	\
 	drm_gem_shmem_helper.c \
+	drm_fbdev_shmem.c \
 	drm_shmem_helpers_freebsd.c
 
 SRCS	+=			\
