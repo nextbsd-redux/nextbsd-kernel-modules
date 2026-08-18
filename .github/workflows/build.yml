@@ -1176,6 +1176,24 @@ jobs:
               else
                 echo "==> VBoxGraphics.kext absent — VBOX stages will be skipped"
               fi
+              # The virtio-gpu trio. Optional like VBoxGraphics so an iterating
+              # build cannot take the proven bochs path down -- but unlike
+              # VBoxGraphics these can actually BIND here, because the qemu
+              # invocation carries -device virtio-gpu-pci. All three are needed:
+              # VirtIOGraphics resolves through LinuxVirtIO (the virtio shim)
+              # and IOGraphicsShmem (the shmem GEM layer).
+              virtio_missing=""
+              for k in LinuxVirtIO IOGraphicsShmem VirtIOGraphics; do
+                [ -d "$GFXDIR/$k.kext" ] || { virtio_missing="$virtio_missing $k"; continue; }
+                cp -R "$GFXDIR/$k.kext" /mnt-root/System/Library/Extensions/
+                chown -R root:wheel /mnt-root/System/Library/Extensions/$k.kext
+                chmod -R go-w /mnt-root/System/Library/Extensions/$k.kext
+              done
+              if [ -n "$virtio_missing" ]; then
+                echo "==> virtio-gpu kexts absent —$virtio_missing — VIRTIO stages will be skipped"
+              else
+                echo "==> virtio-gpu kexts injected (LinuxVirtIO, IOGraphicsShmem, VirtIOGraphics)"
+              fi
               if [ -n "$missing" ]; then
                 echo "==> INCOMPLETE graphics stack (missing:$missing) — graphics stages will be skipped"
                 rm -rf /mnt-root/System/Library/Extensions/BochsGraphics.kext
