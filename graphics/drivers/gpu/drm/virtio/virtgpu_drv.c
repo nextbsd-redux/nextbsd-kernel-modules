@@ -141,17 +141,15 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 	if (ret)
 		goto err_deinit;
 
-#ifndef __FreeBSD__
-	drm_fbdev_shmem_setup(vdev->priv, 32);
-#else
 	/*
-	 * No fbdev emulation: drm_fbdev_shmem.c needs fbdev deferred I/O, which
-	 * drm-kmod's fb_helper does not implement (no fbdefio member,
-	 * fb_deferred_io_init undeclared). This costs fbcon ON THIS GPU, not
-	 * KMS -- the console stays on efifb while /dev/dri/card0 serves X11 and
-	 * Mesa. See graphics/drm_shmem_helpers/Makefile.
+	 * fbdev emulation, which on this driver is the console itself: with no
+	 * linear-framebuffer GOP on arm64 (Blt-only under OVMF, absent entirely
+	 * under Apple's Virtualization.framework) there is no efifb to fall back
+	 * to, so vt(4) has nothing to attach to until this publishes a
+	 * framebuffer. drm_fbdev_shmem.c is built from a vendored copy; see
+	 * graphics/drm_shmem_helpers/Makefile.
 	 */
-#endif
+	drm_fbdev_shmem_setup(vdev->priv, 32);
 	return 0;
 
 err_deinit:
