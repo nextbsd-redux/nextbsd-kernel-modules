@@ -1334,48 +1334,63 @@ jobs:
           fi
 
       # Build the SHIPPED graphics stack: the drm-kmod job already wrapped +
-      # validated the bundles (drm core + i915/amdgpu/radeon, with the
+      # validated the bundles (drm core + the GPU drivers each arch has, with the
       # OSBundleLibraries dependency chain + device-id tables) into the
-      # graphics-kexts-amd64 artifact. Here we inject the FULL per-vendor firmware
+      # graphics-kexts-<arch> artifacts. Here we inject the FULL per-vendor firmware
       # each driver requests by its vendor prefix (firmware/i915/*, firmware/
       # amdgpu/*, firmware/radeon/*) from linux-firmware (KBI-independent blobs),
-      # and ship the whole stack as one graphics-kexts.tar.gz. amdgpu firmware is
+      # and ship each arch's stack as graphics-kexts-<arch>.tar.gz. amdgpu firmware is
       # large (hundreds of MB) — self-contained kext per the bundle-in-kext model.
-      - name: Build + bundle graphics kexts (drm core + i915/amdgpu/radeon, full firmware)
+      #
+      # BOTH arches ship: the drm-kmod job builds and validates arm64 kexts too
+      # (drm core + the virtio-gpu trio: LinuxVirtIO, IOGraphicsShmem,
+      # VirtIOGraphics), and until now that artifact was downloaded here and then
+      # never read, so the arm64 kexts never reached the release and
+      # nextbsd-pkg had nothing to package. The asset is per-arch because the
+      # two arches ship DIFFERENT kext sets of the same names — one arch-less
+      # tarball cannot represent both.
+      - name: Build + bundle graphics kexts (drm core + GPU drivers, full firmware)
         run: |
           set -eu
-          GFX=$(find artifacts/graphics-kexts-amd64 -maxdepth 3 -name '*.kext' -type d 2>/dev/null | head -1)
-          if [ -z "$GFX" ]; then
-            echo "WARN: graphics-kexts-amd64 artifact has no kexts — skipping graphics kexts"
-          else
+          # linux-firmware sparse: the three GPU vendor dirs + their licenses.
+          # Fetched once, outside the per-arch loop — the blobs are KBI- and
+          # arch-independent, so both arches inject from the same checkout.
+          FW_TAG=20260519
+          rm -rf lf
+          git clone --depth 1 --branch "$FW_TAG" --filter=blob:none --sparse \
+              https://gitlab.com/kernel-firmware/linux-firmware.git lf
+          ( cd lf && git sparse-checkout set --no-cone i915 amdgpu radeon \
+              LICENSE.amdgpu LICENSE.radeon LICENSE.i915 )
+          # Inject firmware preserving the vendor subdir the driver asks for
+          # (cp -RL dereferences linux-firmware's versioned symlinks to real files).
+          # Guarded on the .kext existing, not on the arch: arm64 ships none of
+          # these three (no i915 on aarch64; amdgpu/radeon build but are not
+          # packaged there), so each call is a no-op announcement on that leg.
+          inject() { # <kext-dir> <kext-name> <vendor-dir> <license-file>
+            kext="$1/$2.kext"; vdir="$3"; lic="$4"
+            [ -d "$kext" ] || { echo "  $2.kext absent — skip"; return 0; }
+            [ -d "lf/$vdir" ] || { echo "  WARN: lf/$vdir missing — $2.kext ships driver-only"; return 0; }
+            fwd="$kext/Contents/Resources/firmware"; mkdir -p "$fwd"
+            cp -RL "lf/$vdir" "$fwd/"
+            [ -f "lf/$lic" ] && cp -L "lf/$lic" "$fwd/" || true
+            echo "  $2.kext: $(find "$fwd" -type f | wc -l | tr -d ' ') fw files, $(du -sh "$kext" | cut -f1)"
+          }
+          for arch in amd64 arm64; do
+            GFX=$(find "artifacts/graphics-kexts-$arch" -maxdepth 3 -name '*.kext' -type d 2>/dev/null | head -1)
+            if [ -z "$GFX" ]; then
+              echo "WARN: graphics-kexts-$arch artifact has no kexts — skipping $arch graphics kexts"
+              continue
+            fi
             GDIR=$(dirname "$GFX")
-            echo "graphics kexts at: $GDIR"; ls -1 "$GDIR"
-            # linux-firmware sparse: the three GPU vendor dirs + their licenses.
-            FW_TAG=20260519
-            rm -rf lf
-            git clone --depth 1 --branch "$FW_TAG" --filter=blob:none --sparse \
-                https://gitlab.com/kernel-firmware/linux-firmware.git lf
-            ( cd lf && git sparse-checkout set --no-cone i915 amdgpu radeon \
-                LICENSE.amdgpu LICENSE.radeon LICENSE.i915 )
-            # Inject firmware preserving the vendor subdir the driver asks for
-            # (cp -RL dereferences linux-firmware's versioned symlinks to real files).
-            inject() { # <kext-name> <vendor-dir> <license-file>
-              kext="$GDIR/$1.kext"; vdir="$2"; lic="$3"
-              [ -d "$kext" ] || { echo "  $1.kext absent — skip"; return 0; }
-              [ -d "lf/$vdir" ] || { echo "  WARN: lf/$vdir missing — $1.kext ships driver-only"; return 0; }
-              fwd="$kext/Contents/Resources/firmware"; mkdir -p "$fwd"
-              cp -RL "lf/$vdir" "$fwd/"
-              [ -f "lf/$lic" ] && cp -L "lf/$lic" "$fwd/" || true
-              echo "  $1.kext: $(find "$fwd" -type f | wc -l | tr -d ' ') fw files, $(du -sh "$kext" | cut -f1)"
-            }
-            inject IntelGraphics  i915   LICENSE.i915
-            inject AMDGraphics    amdgpu LICENSE.amdgpu
-            inject RadeonGraphics radeon LICENSE.radeon
-            # One asset for the whole graphics stack (drm core kexts carry no
-            # firmware but must ship so the dependency chain resolves at load).
-            tar -C "$GDIR" -czf out/graphics-kexts.tar.gz .
-            echo "==> graphics-kexts.tar.gz: $(du -sh out/graphics-kexts.tar.gz | cut -f1)"
-          fi
+            echo "=== $arch graphics kexts at: $GDIR"; ls -1 "$GDIR"
+            inject "$GDIR" IntelGraphics  i915   LICENSE.i915
+            inject "$GDIR" AMDGraphics    amdgpu LICENSE.amdgpu
+            inject "$GDIR" RadeonGraphics radeon LICENSE.radeon
+            # One asset per arch for the whole graphics stack (drm core kexts carry
+            # no firmware but must ship so the dependency chain resolves at load).
+            tar -C "$GDIR" -czf "out/graphics-kexts-$arch.tar.gz" .
+            echo "==> graphics-kexts-$arch.tar.gz: $(du -sh "out/graphics-kexts-$arch.tar.gz" | cut -f1)"
+          done
 
       # NVIDIA: the chained NVIDIAGraphics595 kext (+ modeset/core) already carries
       # its GSP firmware (bundled at wrap time via ko2kext -f), so unlike the drm
@@ -1406,10 +1421,12 @@ jobs:
             installed into /boot/kernel), `intelwifi-kext.tar.gz` (the
             IntelWiFi.kext bundle with the full iwlwifi firmware set) and
             `intelethernet-kext.tar.gz` (the IntelEthernet.kext bundle, if_em /
-            Intel GbE family) and `graphics-kexts.tar.gz` (the drm-kmod graphics
-            stack: IOGraphics/DMABuf/TTM drm core + IntelGraphics/AMDGraphics/
-            RadeonGraphics, each with its device-id match table + bundled vendor
-            firmware) — all installed into /System/Library/Extensions.
+            Intel GbE family) and `graphics-kexts-<arch>.tar.gz` (the drm-kmod
+            graphics stack: IOGraphics/DMABuf/TTM drm core, plus IntelGraphics/
+            AMDGraphics/RadeonGraphics on amd64 and the virtio-gpu trio
+            (LinuxVirtIO/IOGraphicsShmem/VirtIOGraphics) on both, each with its
+            device-id match table + bundled vendor firmware) — all installed into
+            /System/Library/Extensions.
 
             Build log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
             Commit: ${{ github.sha }}
