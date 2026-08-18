@@ -682,6 +682,16 @@ jobs:
                 org.nextbsd.kext.vboxgraphics VBoxGraphics > pers/VBoxGraphics.iokitpersonalities
           fi
           fi
+          # virtio-gpu: generated on BOTH arches, which is why it sits outside
+          # the amd64-only block above. It is also the only generator here whose
+          # input is a header rather than a driver's pci table -- virtio-gpu
+          # matches by virtio device TYPE and the PCI id is derived from it.
+          # See tools/gen-virtio-gpu-personalities.sh.
+          if [ -f /tmp/ko-out/virtio_gpu_drm.ko ]; then
+            chmod +x "$T/gen-virtio-gpu-personalities.sh"
+            "$T/gen-virtio-gpu-personalities.sh" nbkm-tools/graphics/include/linux/virtio_ids.h \
+                org.nextbsd.kext.virtiographics VirtIOGraphics > pers/VirtIOGraphics.iokitpersonalities
+          fi
           echo "=== device-id counts ==="
           for f in pers/IntelGraphics AMDGraphics RadeonGraphics; do : ; done
           for f in pers/*.iokitpersonalities; do
@@ -779,6 +789,37 @@ jobs:
                  -p pers/VBoxGraphics.iokitpersonalities \
                  "$KO/vboxvideo.ko" VBoxGraphics org.nextbsd.kext.vboxgraphics
           fi
+          # virtio-gpu, on BOTH arches -- the only graphics driver here that is
+          # not amd64-only, because it is the sole KMS candidate an arm64 VM
+          # can present at all.
+          #
+          # Three bundles, because the two companion modules are shared layers
+          # rather than parts of this driver: LinuxVirtIO is the virtio shim
+          # (the next virtio driver ported here needs the same one) and
+          # IOGraphicsShmem is the shmem GEM layer (ast, mgag200, cirrus,
+          # Hyper-V and simpledrm all sit on it).
+          #
+          # Note the dependency shape differs from bochs/vboxvideo: NO TTM.
+          # Those are VRAM-helper drivers whose buffers live in a device BAR;
+          # virtio-gpu's live in swap-backed system memory, which is exactly
+          # why it sidesteps the fictitious-range problem. Linking TTM here
+          # would declare a dependency the driver does not have.
+          if [ -f "$KO/linux_virtio.ko" ]; then
+            "$K" -o "$O" -l org.nextbsd.kext.dmabuf \
+                 "$KO/linux_virtio.ko" LinuxVirtIO org.nextbsd.kext.linuxvirtio
+          fi
+          if [ -f "$KO/drm_shmem_helpers.ko" ]; then
+            "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.dmabuf \
+                 "$KO/drm_shmem_helpers.ko" IOGraphicsShmem org.nextbsd.kext.iographicsshmem
+          fi
+          if [ -f "$KO/virtio_gpu_drm.ko" ] && [ -f pers/VirtIOGraphics.iokitpersonalities ]; then
+            "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.dmabuf \
+                 -l org.nextbsd.kext.iographicsextras \
+                 -l org.nextbsd.kext.iographicsshmem \
+                 -l org.nextbsd.kext.linuxvirtio \
+                 -p pers/VirtIOGraphics.iokitpersonalities \
+                 "$KO/virtio_gpu_drm.ko" VirtIOGraphics org.nextbsd.kext.virtiographics
+          fi
           echo "=== built kexts ==="
           for d in "$O"/*.kext; do echo "  $(basename "$d") ($(du -sh "$d" | cut -f1))"; done
 
@@ -844,6 +885,22 @@ jobs:
               checks['VBoxGraphics'] = ('org.nextbsd.kext.vboxgraphics', '80ee',
                                         ['org.nextbsd.kext.iographics','org.nextbsd.kext.ttm',
                                          'org.nextbsd.kext.iographicsextras'])
+          # The virtio-gpu trio, present on both arches. Note the deps: no TTM,
+          # because these are swap-backed rather than VRAM-backed, and asserting
+          # the absence is as much the point as asserting the presence -- a
+          # spurious TTM edge would be a dependency the driver does not have.
+          if os.path.exists('kexts/LinuxVirtIO.kext'):
+              checks['LinuxVirtIO'] = ('org.nextbsd.kext.linuxvirtio', None,
+                                       ['org.nextbsd.kext.dmabuf'])
+          if os.path.exists('kexts/IOGraphicsShmem.kext'):
+              checks['IOGraphicsShmem'] = ('org.nextbsd.kext.iographicsshmem', None,
+                                           ['org.nextbsd.kext.iographics','org.nextbsd.kext.dmabuf'])
+          if os.path.exists('kexts/VirtIOGraphics.kext'):
+              checks['VirtIOGraphics'] = ('org.nextbsd.kext.virtiographics', '1af4',
+                                          ['org.nextbsd.kext.iographics','org.nextbsd.kext.dmabuf',
+                                           'org.nextbsd.kext.iographicsextras',
+                                           'org.nextbsd.kext.iographicsshmem',
+                                           'org.nextbsd.kext.linuxvirtio'])
           def load(n):
               return plistlib.load(open(f'kexts/{n}.kext/Contents/Info.plist','rb'))
           for name,(bid,vendor,deps) in checks.items():
@@ -886,7 +943,7 @@ jobs:
           # Build the list from what actually shipped: IntelGraphics is absent on
           # arm64, and the virtual-GPU kexts are amd64-only too.
           allmatched=[n for n in ('AMDGraphics','RadeonGraphics','IntelGraphics',
-                                  'BochsGraphics','VBoxGraphics') if n in checks]
+                                  'BochsGraphics','VBoxGraphics','VirtIOGraphics') if n in checks]
           pairs=[(a,b) for i,a in enumerate(allmatched) for b in allmatched[i+1:]]
           for a,b in pairs:
               o=ids(a)&ids(b)
