@@ -120,8 +120,36 @@ virtio_gpu_transport_is_pci(device_t transport)
 static int
 virtio_gpu_drm_probe(device_t dev)
 {
+	int rv;
 
-	return (VIRTIO_SIMPLE_PROBE(dev, virtio_gpu_drm));
+	rv = VIRTIO_SIMPLE_PROBE(dev, virtio_gpu_drm);
+
+	/*
+	 * Outrank base's virtio_gpu(4), which claims the same virtio device
+	 * type (16) from vtgpu_probe() with the identical VIRTIO_SIMPLE_PROBE
+	 * helper -- so at equal priority the tie goes to whichever driver
+	 * newbus reaches first, and that is always the compiled-in one. On
+	 * arm64 that is not academic: GENERIC includes virtio_gpu, so vtgpu
+	 * takes 1af4:1050 during boot, this driver never gets a probe, and no
+	 * DRM node is ever published. (amd64 GENERIC has no virtio_gpu, which
+	 * is why the amd64 boot test binds and the breakage is arm64-only.)
+	 *
+	 * BUS_PROBE_VENDOR (-10) vs BUS_PROBE_DEFAULT (-20) is the mechanism
+	 * newbus provides for exactly this: a more capable driver superseding
+	 * the base one. Deliberately NOT done by removing virtio_gpu from the
+	 * kernel config -- leaving it in place keeps a working console driver
+	 * on any machine where this kext is absent, and it simply loses the
+	 * probe wherever the kext is present.
+	 *
+	 * Requires this kext to be resident before the virtio bus probes its
+	 * children, i.e. preloaded by the loader rather than kextd-loaded
+	 * after root mount; a later load still gets no probe, because newbus
+	 * does not re-probe an already-attached device.
+	 */
+	if (rv == BUS_PROBE_DEFAULT)
+		rv = BUS_PROBE_VENDOR;
+
+	return (rv);
 }
 
 static int
