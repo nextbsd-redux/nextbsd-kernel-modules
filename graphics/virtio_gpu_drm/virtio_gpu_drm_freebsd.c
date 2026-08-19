@@ -60,6 +60,7 @@
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
+#include <sys/taskqueue.h>
 
 #include <machine/bus.h>
 
@@ -290,6 +291,111 @@ static driver_t virtio_gpu_drm_driver = {
 	virtio_gpu_drm_methods,
 	sizeof(struct virtio_gpu_drm_softc),
 };
+
+/*
+ * Take the virtio-gpu device over from base virtio_gpu(4).
+ *
+ * On a stock boot base wins the device outright: it is compiled into GENERIC,
+ * it probes long before any kext exists, and it becomes the vt(4) console
+ * backend. On arm64 that is the ONLY console -- a qemu `virt` guest and Apple
+ * Virtualization.framework both lack an EFI GOP, so there is no efifb to fall
+ * back on. That is exactly why base stays compiled in rather than being
+ * nodevice'd out: removing it buys KMS at the price of a blind boot, from the
+ * first kernel message until userland gets around to loading this kext.
+ *
+ * But loading this module later does not disturb base either, and that is the
+ * problem this solves. bus_generic_driver_added() re-probes only children in
+ * DS_NOTPRESENT, so an already-attached vtgpu0 is never re-bid no matter how
+ * much better a driver arrives afterwards, and /dev/dri/card0 never appears.
+ * (releng/15.1 has no DF_REBID; that mechanism is gone.)
+ *
+ * So take the device explicitly. This is DEV_SET_DRIVER's sequence -- see the
+ * devctl2 ioctl in kern/subr_bus.c -- expressed in exported functions: detach
+ * base, then re-probe. device_detach() drops the devclass of a non-fixed
+ * device, so the re-probe is a clean bid, and virtio_gpu_drm_probe()'s
+ * BUS_PROBE_VENDOR outranks base's BUS_PROBE_DEFAULT. This driver wins.
+ *
+ * The detach and the re-attach MUST stay inside one bus_topo_lock() section.
+ * Measured on arm64: leave vt(4) with no backend between them -- a bare
+ * `devctl detach vtgpu0` does exactly that -- and the machine panics seconds
+ * later, when the next console write lands on a driver that is gone.
+ * vtgpu_detach() calls vt_deallocate(), and nothing repaints until the
+ * replacement registers drmfb. The whole handover is one atomic step or it is
+ * a crash; there is no middle state that survives.
+ *
+ * Deferred to a task, and driven from a SYSINIT rather than a chained module
+ * event handler, for two independent reasons:
+ *   - driver_module_handler() calls the chained MOD_LOAD handler BEFORE
+ *     devclass_add_driver() (kern/subr_bus.c), so inline this driver would not
+ *     yet be registered and the re-probe would hand the device back to base;
+ *   - VIRTIO_DRIVER_MODULE registers on both virtio transports, so a chained
+ *     handler runs twice.
+ */
+static struct task virtio_gpu_drm_takeover_task;
+
+static void
+virtio_gpu_drm_takeover(void *ctx __unused, int pending __unused)
+{
+	char nameunit[64];
+	devclass_t dc;
+	device_t *devs;
+	int error, i, ndevs;
+
+	dc = devclass_find("vtgpu");		/* base virtio_gpu(4) */
+	if (dc == NULL)
+		return;				/* base not present -- nothing to take */
+
+	bus_topo_lock();
+	if (devclass_get_devices(dc, &devs, &ndevs) != 0) {
+		bus_topo_unlock();
+		return;
+	}
+	for (i = 0; i < ndevs; i++) {
+		if (!device_is_attached(devs[i]))
+			continue;
+		/*
+		 * Snapshot the name: device_detach() releases the unit back to
+		 * the devclass, so device_get_nameunit() is only meaningful
+		 * while base still owns the device.
+		 */
+		strlcpy(nameunit, device_get_nameunit(devs[i]),
+		    sizeof(nameunit));
+
+		error = device_detach(devs[i]);
+		if (error != 0) {
+			/*
+			 * Base kept the device (it is the console, so this is
+			 * the safe outcome). No KMS this boot, but the screen
+			 * still works.
+			 */
+			printf("virtio_gpu_drm: %s would not detach (%d); "
+			    "leaving base virtio_gpu(4) in place\n",
+			    nameunit, error);
+			continue;
+		}
+		error = device_probe_and_attach(devs[i]);
+		if (error != 0)
+			printf("virtio_gpu_drm: re-probe of %s failed (%d)\n",
+			    nameunit, error);
+	}
+	free(devs, M_TEMP);
+	bus_topo_unlock();
+}
+
+static void
+virtio_gpu_drm_takeover_init(void *arg __unused)
+{
+
+	TASK_INIT(&virtio_gpu_drm_takeover_task, 0, virtio_gpu_drm_takeover,
+	    NULL);
+	taskqueue_enqueue(taskqueue_thread, &virtio_gpu_drm_takeover_task);
+}
+/*
+ * SI_SUB_CONFIGURE is after SI_SUB_KLD, where a kld's DRIVER_MODULEs register,
+ * so by the time this runs virtio_gpu_drm is a candidate driver.
+ */
+SYSINIT(virtio_gpu_drm_takeover, SI_SUB_CONFIGURE, SI_ORDER_ANY,
+    virtio_gpu_drm_takeover_init, NULL);
 
 VIRTIO_DRIVER_MODULE(virtio_gpu_drm, virtio_gpu_drm_driver, 0, 0);
 MODULE_VERSION(virtio_gpu_drm, 1);
