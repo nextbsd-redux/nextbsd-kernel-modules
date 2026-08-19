@@ -234,6 +234,11 @@ jobs:
           done
           cp /tmp/nk/config/NEXTBSD /usr/src/sys/${{ matrix.target }}/conf/
 
+      - name: Checkout tools (ko2kext + personality generators)
+        uses: actions/checkout@v4
+        with:
+          path: nbkm-tools
+
       - name: Build drm-kmod (6.12-lts) against the kernel obj
         run: |
           git clone --depth 1 --branch 6.12-lts \
@@ -242,12 +247,23 @@ jobs:
           # patches rather than vendored files because these belong to modules
           # drm-kmod's own Makefile builds (drm.ko), so a copy under
           # graphics/drivers/ would never be compiled in their place.
-          if [ -d "$GITHUB_WORKSPACE/graphics/drm-kmod-patches" ]; then
-            for p in "$GITHUB_WORKSPACE"/graphics/drm-kmod-patches/*.patch; do
+          #
+          # NOT guarded by `if [ -d ... ]`. An earlier version was, and when the
+          # repo checkout turned out to happen LATER in this job the directory
+          # did not exist, the loop skipped, and the build went green having
+          # applied nothing -- the patch's absence was only caught by grepping
+          # format strings out of the built .ko. Missing patches now fail here.
+          PATCHDIR="$GITHUB_WORKSPACE/nbkm-tools/graphics/drm-kmod-patches"
+          if [ -d "$PATCHDIR" ]; then
+            for p in "$PATCHDIR"/*.patch; do
               [ -e "$p" ] || continue
               echo "==> applying $(basename "$p")"
-              patch -d /tmp/drm-kmod -p1 --batch --forward < "$p"
+              patch -d /tmp/drm-kmod -p1 --batch --forward < "$p" || {
+                echo "::error::failed to apply $(basename "$p")"; exit 1; }
             done
+          else
+            echo "::error::$PATCHDIR missing -- repo not checked out before the drm-kmod build"
+            exit 1
           fi
           NPROC=$(nproc)
           cd /usr/src
@@ -306,11 +322,6 @@ jobs:
       # validate every Info.plist. Firmware (per-vendor, ko2kext -f) + the on-real-
       # HW load test come next; this proves the bundles + matching + de-overlap are
       # correct end to end.
-      - name: Checkout tools (ko2kext + personality generators)
-        uses: actions/checkout@v4
-        with:
-          path: nbkm-tools
-
       # EXPERIMENTAL (graphics kext series, step 2): build the DRM GEM/KMS
       # helper layer drm-kmod does not compile. Per the graphics plan, the real
       # cost of every small virtual-GPU driver (bochs, vboxvideo, virtio-gpu) is
