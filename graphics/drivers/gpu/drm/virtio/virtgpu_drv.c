@@ -36,6 +36,10 @@
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_fbdev_shmem.h>
+
+#ifdef __FreeBSD__
+#include <sys/kernel.h>	/* TUNABLE_INT_FETCH */
+#endif
 #include <drm/drm_file.h>
 
 #include "virtgpu_drv.h"
@@ -141,17 +145,41 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 	if (ret)
 		goto err_deinit;
 
-#ifndef __FreeBSD__
-	drm_fbdev_shmem_setup(vdev->priv, 32);
-#else
 	/*
-	 * No fbdev emulation: drm_fbdev_shmem.c needs fbdev deferred I/O, which
-	 * drm-kmod's fb_helper does not implement (no fbdefio member,
-	 * fb_deferred_io_init undeclared). This costs fbcon ON THIS GPU, not
-	 * KMS -- the console stays on efifb while /dev/dri/card0 serves X11 and
-	 * Mesa. See graphics/drm_shmem_helpers/Makefile.
+	 * fbdev emulation, which on this driver is the console itself: with no
+	 * linear-framebuffer GOP on arm64 (Blt-only under OVMF, absent entirely
+	 * under Apple's Virtualization.framework) there is no efifb to fall back
+	 * to, so vt(4) has nothing to attach to until this publishes a
+	 * framebuffer. drm_fbdev_shmem.c is built from a vendored copy; see
+	 * graphics/drm_shmem_helpers/Makefile.
+	 *
+	 * Verified on NextBSD/arm64 (kernel built `nodevice virtio_gpu`, so this
+	 * driver owns the device):
+	 *
+	 *	[drm] Initialized virtio_gpu 0.1.0 for virtio_pci1 on minor 0
+	 *	VT: initialize with new VT driver "drmfb".
+	 *	FB_INFO: height=800 width=1280 depth=32 pbase=0x0
+	 *
+	 * Requires the LinuxKPI DMA fix (nextbsd-kernel patch 0012): the
+	 * pci_dev this driver hangs off is manufactured by lkpinew_pci_dev(),
+	 * which historically left dev.dma_priv NULL, so drm_gem_shmem's
+	 * dma_map_sgtable() panicked. Without a real mapping the picture is
+	 * garbage, because the mapping carries bus/cache synchronisation as
+	 * well as address translation.
+	 *
+	 * hw.virtio_gpu_drm.fbdev=0 turns it off.
 	 */
-#endif
+	{
+		int fbdev = 1;
+
+		TUNABLE_INT_FETCH("hw.virtio_gpu_drm.fbdev", &fbdev);
+		if (fbdev != 0)
+			drm_fbdev_shmem_setup(vdev->priv, 32);
+		else
+			DRM_INFO("fbdev emulation disabled by "
+			    "hw.virtio_gpu_drm.fbdev=0\n");
+	}
+
 	return 0;
 
 err_deinit:

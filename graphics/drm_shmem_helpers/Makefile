@@ -9,16 +9,22 @@
 # mgag200, cirrus and simpledrm. Paying for it once here is what makes the
 # others cheap, exactly as drm_extra_helpers did for bochs and vboxvideo.
 #
-# drm_fbdev_shmem.c is deliberately NOT built, though drm-kmod ships the file
-# and compiles it into nothing. Measured: it needs fbdev DEFERRED I/O, which
-# drm-kmod's fbdev emulation does not have -- fb_deferred_io_{init,cleanup} are
-# undeclared and neither struct drm_fb_helper nor struct linux_fb_info carries
-# an fbdefio member. That was 8 of the 15 errors in the first CI run.
+# drm_fbdev_shmem.c IS built, from a vendored copy under ../drivers/gpu/drm/
+# that guards four blocks with #ifdef __linux__ -- the same thing drm-kmod
+# already does in the sibling drm_fbdev_ttm.c, which it does build.
 #
-# The cost of leaving it out is fbcon on the virtio GPU, not KMS: the console
-# stays on efifb while /dev/dri/card0 serves X11 and Mesa, which is the target.
-# virtio-gpu's one call to drm_fbdev_shmem_setup() is #ifdef'd out to match.
-# Wiring deferred I/O into drm-kmod's fb_helper is its own piece of work.
+# The earlier note here said this needed fbdev DEFERRED I/O first. That was
+# wrong. Everything in Linux's fb_defio.c serves a userspace mmap() of
+# /dev/fbN, and drm-kmod creates no such cdev; the console damage path runs
+# through fb_ops -> drm_fb_helper_damage_area() -> fb_dirty ->
+# drm_atomic_helper_dirtyfb, which is implemented and exported already.
+#
+# It also said the cost was "fbcon on the virtio GPU, not KMS: the console
+# stays on efifb". That premise does not hold on arm64: qemu's OVMF gives a
+# Blt-only GOP for virtio-gpu (no linear framebuffer, so no efifb), and Apple's
+# Virtualization.framework publishes no GOP at all. With no efifb anywhere,
+# this fbdev is the only console such a guest can have once the kext owns the
+# device.
 #
 # Why this is a separate module from drm_extra_helpers: that one is required by
 # the boot test, because BochsGraphics resolves through IOGraphicsExtras.
@@ -46,6 +52,7 @@ EXPORT_SYMS=	YES
 
 SRCS=	\
 	drm_gem_shmem_helper.c \
+	drm_fbdev_shmem.c \
 	drm_shmem_helpers_freebsd.c
 
 SRCS	+=			\
