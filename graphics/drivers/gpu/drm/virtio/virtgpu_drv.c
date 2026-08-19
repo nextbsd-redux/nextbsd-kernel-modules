@@ -153,29 +153,26 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 	 * framebuffer. drm_fbdev_shmem.c is built from a vendored copy; see
 	 * graphics/drm_shmem_helpers/Makefile.
 	 *
-	 * OFF BY DEFAULT. Measured 2026-08-18 on NextBSD/arm64: the call panics
-	 * the kernel when this driver binds -- reproduced twice, both with vt(4)
-	 * lacking a live backend at the time (a kernel built `nodevice
-	 * virtio_gpu`, and a forced `devctl set driver` handover). The panic text
-	 * could not be captured: freeing the device is what removes the only
-	 * console, the VM has no serial backend, and there is no dump device.
+	 * Verified on NextBSD/arm64 (kernel built `nodevice virtio_gpu`, so this
+	 * driver owns the device):
 	 *
-	 * Gated rather than reverted so the rest of the fbdev plumbing stays
-	 * built and the failure is one tunable away from being bisected:
+	 *	[drm] Initialized virtio_gpu 0.1.0 for virtio_pci1 on minor 0
+	 *	VT: initialize with new VT driver "drmfb".
+	 *	FB_INFO: height=800 width=1280 depth=32 pbase=0x0
 	 *
-	 *	hw.virtio_gpu_drm.fbdev=1	(loader.conf or kenv)
+	 * hw.virtio_gpu_drm.fbdev=0 turns it off again.
 	 */
 	{
-		int fbdev = 0;
+		int fbdev = 1;
 
 		TUNABLE_INT_FETCH("hw.virtio_gpu_drm.fbdev", &fbdev);
 		if (fbdev != 0)
 			drm_fbdev_shmem_setup(vdev->priv, 32);
 		else
-			DRM_INFO("fbdev emulation disabled; set "
-			    "hw.virtio_gpu_drm.fbdev=1 to enable (known to "
-			    "panic, see virtgpu_drv.c)\n");
+			DRM_INFO("fbdev emulation disabled by "
+			    "hw.virtio_gpu_drm.fbdev=0\n");
 	}
+
 	return 0;
 
 err_deinit:
