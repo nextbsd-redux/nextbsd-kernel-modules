@@ -169,8 +169,10 @@ void drm_gem_shmem_free(struct drm_gem_shmem_object *shmem)
 		drm_WARN_ON(obj->dev, shmem->vmap_use_count);
 
 		if (shmem->sgt) {
+#ifndef __FreeBSD__
 			dma_unmap_sgtable(obj->dev->dev, shmem->sgt,
 					  DMA_BIDIRECTIONAL, 0);
+#endif
 			sg_free_table(shmem->sgt);
 			kfree(shmem->sgt);
 		}
@@ -472,7 +474,9 @@ void drm_gem_shmem_purge(struct drm_gem_shmem_object *shmem)
 
 	drm_WARN_ON(obj->dev, !drm_gem_shmem_is_purgeable(shmem));
 
+#ifndef __FreeBSD__
 	dma_unmap_sgtable(dev->dev, shmem->sgt, DMA_BIDIRECTIONAL, 0);
+#endif
 	sg_free_table(shmem->sgt);
 	kfree(shmem->sgt);
 	shmem->sgt = NULL;
@@ -785,9 +789,34 @@ static struct sg_table *drm_gem_shmem_get_pages_sgt_locked(struct drm_gem_shmem_
 		goto err_put_pages;
 	}
 	/* Map the pages for use by the h/w. */
+#ifdef __FreeBSD__
+	/*
+	 * No DMA mapping here. A virtio device attached by FreeBSD's native
+	 * virtio_pci(4) gets its struct device manufactured by
+	 * lkpinew_pci_dev(), which does not run linux_pdev_dma_init() -- that
+	 * is static to linux_pci.c and only runs when LinuxKPI itself attaches
+	 * a PCI driver. So obj->dev->dev->dma_priv is NULL and
+	 * dma_map_sgtable() dereferences it:
+	 *
+	 *   Fatal data abort ... far: 0x38  esr: 0x96000004
+	 *   panic: vm_fault failed: linux_dma_map_sg_attrs+0x64
+	 *
+	 * The one consumer here, virtio-gpu, negotiates without
+	 * VIRTIO_F_ACCESS_PLATFORM (virtio_has_dma_quirk() is true), so
+	 * virtio_gpu_object_shmem_init() takes the sg_phys() branch and never
+	 * reads sg_dma_address(). These are ordinary swap-backed system pages;
+	 * there is nothing to map.
+	 *
+	 * Revisit if a shmem consumer ever needs real DMA addresses here --
+	 * that needs the DMA tag plumbed onto the manufactured pci_dev, which
+	 * is a LinuxKPI change, not a change here.
+	 */
+	ret = 0;
+#else
 	ret = dma_map_sgtable(obj->dev->dev, sgt, DMA_BIDIRECTIONAL, 0);
 	if (ret)
 		goto err_free_sgt;
+#endif
 
 	shmem->sgt = sgt;
 
