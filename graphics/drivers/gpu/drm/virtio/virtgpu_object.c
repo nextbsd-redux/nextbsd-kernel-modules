@@ -164,20 +164,7 @@ static int virtio_gpu_object_shmem_init(struct virtio_gpu_device *vgdev,
 					struct virtio_gpu_mem_entry **ents,
 					unsigned int *nents)
 {
-#ifdef __FreeBSD__
-	/*
-	 * Always physical addresses here. drm_gem_shmem_get_pages_sgt() does
-	 * not dma_map on FreeBSD -- the struct device behind a natively
-	 * attached virtio device is manufactured by lkpinew_pci_dev() and has
-	 * no DMA tag, so mapping faults -- which means sg_dma_address() is
-	 * never populated. Taking the DMA branch here would hand the device
-	 * zeroed addresses and it would scan out unrelated memory: the screen
-	 * fills with noise rather than the console.
-	 */
-	bool use_dma_api = false;
-#else
 	bool use_dma_api = !virtio_has_dma_quirk(vgdev->vdev);
-#endif
 	struct scatterlist *sg;
 	struct sg_table *pages;
 	int si;

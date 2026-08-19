@@ -160,24 +160,24 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 	 *	VT: initialize with new VT driver "drmfb".
 	 *	FB_INFO: height=800 width=1280 depth=32 pbase=0x0
 	 *
-	 * OFF BY DEFAULT: it no longer panics, but the picture is wrong -- the
-	 * host scans out garbage rather than what the console drew. See the PR
-	 * for the analysis; the missing piece is whatever dma_map_sgtable() was
-	 * doing besides address translation (bus/cache sync), which we cannot
-	 * do while the manufactured pci_dev has no DMA tag.
+	 * Requires the LinuxKPI DMA fix (nextbsd-kernel patch 0012): the
+	 * pci_dev this driver hangs off is manufactured by lkpinew_pci_dev(),
+	 * which historically left dev.dma_priv NULL, so drm_gem_shmem's
+	 * dma_map_sgtable() panicked. Without a real mapping the picture is
+	 * garbage, because the mapping carries bus/cache synchronisation as
+	 * well as address translation.
 	 *
-	 * hw.virtio_gpu_drm.fbdev=1 turns it on for further debugging.
+	 * hw.virtio_gpu_drm.fbdev=0 turns it off.
 	 */
 	{
-		int fbdev = 0;
+		int fbdev = 1;
 
 		TUNABLE_INT_FETCH("hw.virtio_gpu_drm.fbdev", &fbdev);
 		if (fbdev != 0)
 			drm_fbdev_shmem_setup(vdev->priv, 32);
 		else
-			DRM_INFO("fbdev emulation disabled; set "
-			    "hw.virtio_gpu_drm.fbdev=1 to enable (console "
-			    "comes up but the picture is wrong)\n");
+			DRM_INFO("fbdev emulation disabled by "
+			    "hw.virtio_gpu_drm.fbdev=0\n");
 	}
 
 	return 0;
