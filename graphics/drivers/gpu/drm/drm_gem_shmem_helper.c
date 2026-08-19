@@ -468,7 +468,9 @@ EXPORT_SYMBOL(drm_gem_shmem_madvise);
 void drm_gem_shmem_purge(struct drm_gem_shmem_object *shmem)
 {
 	struct drm_gem_object *obj = &shmem->base;
+#ifndef __FreeBSD__
 	struct drm_device *dev = obj->dev;
+#endif
 
 	dma_resv_assert_held(shmem->base.resv);
 
@@ -822,9 +824,11 @@ static struct sg_table *drm_gem_shmem_get_pages_sgt_locked(struct drm_gem_shmem_
 
 	return sgt;
 
+#ifndef __FreeBSD__
 err_free_sgt:
 	sg_free_table(sgt);
 	kfree(sgt);
+#endif
 err_put_pages:
 	drm_gem_shmem_put_pages(shmem);
 	return ERR_PTR(ret);
