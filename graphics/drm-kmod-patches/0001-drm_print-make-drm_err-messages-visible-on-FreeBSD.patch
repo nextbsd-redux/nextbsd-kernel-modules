@@ -1,0 +1,55 @@
+drm_print: make drm_err()/drm_warn() messages visible on FreeBSD
+
+__drm_dev_vprintk() formats every message through %pV, which FreeBSD's kernel
+printf does not implement -- sys/kern/subr_prf.c has no 'V' case at all, and
+linuxkpi maps printk() straight to printf(). So the "[drm]" prefix prints and
+the entire message body is silently dropped.
+
+Measured on an arm64 guest: 16 consecutive errors during X cursor activity
+produced exactly this in dmesg, with nothing between them --
+
+    [drm] *ERROR* [drm] *ERROR* [drm] *ERROR* ...
+
+od(1) confirmed the buffer holds only the repeated prefix: no message, and not
+even the stray hex pointer + literal 'V' that a bare %p would have left. Every
+drm_err()/drm_warn()/drm_info() call in the tree is affected, so no DRM
+diagnostic has ever been readable here.
+
+DRM_ERROR() is unaffected: this same file's __drm_err() already carries a
+__FreeBSD__ branch doing printf() + vprintf() instead of %pV. Do the same in
+__drm_dev_vprintk().
+
+--- a/drivers/gpu/drm/drm_print.c
++++ b/drivers/gpu/drm/drm_print.c
+@@ -204,6 +204,23 @@
+ 	if (!prefix)
+ 		prefix = "";
+ 
++#ifdef __FreeBSD__
++	/*
++	 * FreeBSD's printf(9) implements no %pV -- sys/kern/subr_prf.c has no
++	 * 'V' case at all -- so passing vaf through it drops the entire message
++	 * body and leaves a bare "[drm]" prefix behind.  Format it the way
++	 * __drm_err() in this file already does for FreeBSD: emit the prefix,
++	 * then let vprintf() expand the caller's format with its own args.  The
++	 * caller's fmt carries its own trailing newline, exactly as on Linux.
++	 */
++	if (origin != NULL)
++		printf("%s[" DRM_NAME ":%p]%s%s ", level, origin, prefix_pad,
++		       prefix);
++	else
++		printf("%s[" DRM_NAME "]%s%s ", level, prefix_pad, prefix);
++	vprintf(vaf->fmt, *vaf->va);
++	return;
++#else
+ 	if (dev) {
+ 		if (origin)
+ 			dev_printk(level, dev, "[" DRM_NAME ":%ps]%s%s %pV",
+@@ -219,6 +236,7 @@
+ 			printk("%s" "[" DRM_NAME "]%s%s %pV",
+ 			       level, prefix_pad, prefix, vaf);
+ 	}
++#endif
+ }
+ 
+ void __drm_printfn_info(struct drm_printer *p, struct va_format *vaf)

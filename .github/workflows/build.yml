@@ -238,6 +238,17 @@ jobs:
         run: |
           git clone --depth 1 --branch 6.12-lts \
             https://github.com/freebsd/drm-kmod.git /tmp/drm-kmod
+          # Local fixes to drm-kmod itself, applied to the fresh clone. Kept as
+          # patches rather than vendored files because these belong to modules
+          # drm-kmod's own Makefile builds (drm.ko), so a copy under
+          # graphics/drivers/ would never be compiled in their place.
+          if [ -d "$GITHUB_WORKSPACE/graphics/drm-kmod-patches" ]; then
+            for p in "$GITHUB_WORKSPACE"/graphics/drm-kmod-patches/*.patch; do
+              [ -e "$p" ] || continue
+              echo "==> applying $(basename "$p")"
+              patch -d /tmp/drm-kmod -p1 --batch --forward < "$p"
+            done
+          fi
           NPROC=$(nproc)
           cd /usr/src
           ./tools/build/make.py \
