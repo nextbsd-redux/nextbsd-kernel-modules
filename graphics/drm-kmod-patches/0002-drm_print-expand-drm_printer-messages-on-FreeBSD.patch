@@ -1,0 +1,86 @@
+drm_print: expand &drm_printer messages on FreeBSD
+
+The previous patch fixed __drm_dev_vprintk(), which serves the DRM_DEV_*
+family.  It does not fix the path that actually produces the unreadable
+"[drm] *ERROR* " runs, because drm_err() never reaches __drm_dev_vprintk():
+
+    #define __drm_printk(drm, level, type, fmt, ...)                        \
+            dev_##level##type((drm) ? (drm)->dev : NULL, "[drm] " fmt, ...)
+    #define drm_err(drm, fmt, ...)                                          \
+            __drm_printk((drm), err,, "*ERROR* " fmt, ##__VA_ARGS__)
+
+so drm_err() -> dev_err() -> printf(9).  A direct drm_err(dev, "failed: %d\n",
+ret) therefore prints fine -- its format string holds no %pV.
+
+The messages that vanish are the &drm_printer ones.  __drm_printfn_err()
+passes the caller's va_format down as %pV:
+
+    drm_err(drm, "%pV", vaf);            -> "[drm] *ERROR* %pV"
+    drm_err(drm, "%s %pV", prefix, vaf); -> "[drm] *ERROR* %s %pV"
+
+Both literals are present in the built drm.ko, and disassembly of
+__drm_printfn_err confirms they are the only two format strings it uses:
+
+    91ce8:  adrp x1, 24000
+    91cec:  add  x1, x1, #0x942    ; "[drm] *ERROR* %s %pV"
+    91cfc:  adrp x1, 2e000
+    91d00:  add  x1, x1, #0x587    ; "[drm] *ERROR* %pV"
+
+printf(9) has no 'V' conversion, so output stops exactly at the %pV: the
+prefix prints, the body and its trailing newline do not.  Measured on an
+arm64 guest, where "xsetroot -cursor_name" reliably yields runs of
+
+    [drm] *ERROR* [drm] *ERROR* [drm] *ERROR* ...
+
+Expand the format in the FreeBSD branch instead, the way __drm_dev_vprintk()
+now does.  __drm_printfn_info() has the identical bug and is fixed with it.
+
+--- a/drivers/gpu/drm/drm_print.c
++++ b/drivers/gpu/drm/drm_print.c
+@@ -242,7 +242,12 @@
+ void __drm_printfn_info(struct drm_printer *p, struct va_format *vaf)
+ {
+ #ifdef __FreeBSD__
+-	dev_info((const struct device *)(p->arg), "[" DRM_NAME "] %pV", vaf);
++	/*
++	 * Same %pV problem as __drm_printfn_err() below: expand the caller's
++	 * format here instead of handing it down to be dropped.
++	 */
++	printf("[" DRM_NAME "] ");
++	vprintf(vaf->fmt, *vaf->va);
+ #else
+ 	dev_info(p->arg, "[" DRM_NAME "] %pV", vaf);
+ #endif	
+@@ -264,12 +269,32 @@
+ 
+ void __drm_printfn_err(struct drm_printer *p, struct va_format *vaf)
+ {
++#ifdef __FreeBSD__
++	/*
++	 * Do not hand %pV down to drm_err().  drm_err() expands to dev_err(),
++	 * which is device_printf()/printf() on FreeBSD, and printf(9) implements
++	 * no 'V' conversion -- sys/kern/subr_prf.c has no 'V' case at all -- so
++	 * the whole message body is dropped and only the "[drm] *ERROR* " prefix
++	 * reaches the console.  Emit the prefix here and let vprintf() expand the
++	 * caller's format with its own args, exactly as __drm_dev_vprintk() above
++	 * already does.  The caller's fmt carries its own trailing newline.
++	 *
++	 * This is the path drm_err_printer() and every other &drm_printer-based
++	 * error takes; direct drm_err() calls pass a real format string and were
++	 * never affected.
++	 */
++	printf("[" DRM_NAME "] *ERROR* ");
++	if (p->prefix)
++		printf("%s ", p->prefix);
++	vprintf(vaf->fmt, *vaf->va);
++#else
+ 	struct drm_device *drm = p->arg;
+ 
+ 	if (p->prefix)
+ 		drm_err(drm, "%s %pV", p->prefix, vaf);
+ 	else
+ 		drm_err(drm, "%pV", vaf);
++#endif
+ }
+ EXPORT_SYMBOL(__drm_printfn_err);
+ 
