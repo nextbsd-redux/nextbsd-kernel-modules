@@ -278,15 +278,33 @@ static struct sg_table *vmalloc_to_sgt(char *data, uint32_t size, int *sg_ents)
 	struct sg_table *sgt;
 	struct scatterlist *sg;
 	struct page *pg;
+	unsigned int offset;
 
-	if (WARN_ON(!PAGE_ALIGNED(data)))
-		return NULL;
+	/*
+	 * Do not require a page-aligned buffer.  Linux only ever reaches here
+	 * with genuine vmalloc() memory, which is page-aligned by construction,
+	 * but FreeBSD's is_vmalloc_addr() is not that precise: it is true for
+	 * kvmalloc()'d memory as well, and kvmalloc() only returns page-aligned
+	 * memory once the allocation reaches a page.  The caller's ent list is
+	 * sizeof(struct virtio_gpu_mem_entry) * nents, so whether it lands
+	 * aligned depends entirely on the size of the object being backed:
+	 *
+	 *   1280x800x4 primary fb -> ~1000 ents -> ~16K -> aligned  -> worked
+	 *   64x64x4    cursor bo  ->     4 ents ->   64B -> unaligned -> failed
+	 *
+	 * so RESOURCE_ATTACH_BACKING was silently dropped (-ENOMEM) for exactly
+	 * the small objects, leaving the host with a cursor resource that had no
+	 * backing pages: the pointer tracked and clicked but drew nothing.
+	 *
+	 * Honour the offset within the first page instead of rejecting it.
+	 */
+	offset = (unsigned int)((uintptr_t)data & (PAGE_SIZE - 1));
 
 	sgt = kmalloc(sizeof(*sgt), GFP_KERNEL);
 	if (!sgt)
 		return NULL;
 
-	*sg_ents = DIV_ROUND_UP(size, PAGE_SIZE);
+	*sg_ents = DIV_ROUND_UP(offset + size, PAGE_SIZE);
 	ret = sg_alloc_table(sgt, *sg_ents, GFP_KERNEL);
 	if (ret) {
 		kfree(sgt);
@@ -301,11 +319,12 @@ static struct sg_table *vmalloc_to_sgt(char *data, uint32_t size, int *sg_ents)
 			return NULL;
 		}
 
-		s = min_t(int, PAGE_SIZE, size);
-		sg_set_page(sg, pg, s, 0);
+		s = min_t(int, PAGE_SIZE - offset, size);
+		sg_set_page(sg, pg, s, offset);
 
 		size -= s;
 		data += s;
+		offset = 0;
 	}
 
 	return sgt;
