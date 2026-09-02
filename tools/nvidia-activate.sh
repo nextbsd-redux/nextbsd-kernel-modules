@@ -43,7 +43,7 @@ link_dir() {
 		# The bundle still SHIPS libgbm.so.1 (Resources/lib), so pkg records it
 		# as shlibs_provided and no mesa-libs/llvm dependency is added;
 		# libnvidia-egl-gbm resolves mesa's libgbm once the user installs
-		# mesa-libs for OpenGL. See nextbsd-kernel-modules libgbm-eviction fix.
+		# mesa-libs for OpenGL. See nextbsd-kernel-extensions libgbm-eviction fix.
 		case "$(basename "$_f")" in
 		libgbm.so|libgbm.so.*) continue ;;
 		esac

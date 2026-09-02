@@ -56,7 +56,7 @@ echo "==> using UEFI firmware: $OVMF"
 
 KEXT_PATH=/System/Library/Extensions/Nmdm.kext
 IWIFI_PATH=/System/Library/Extensions/IntelWiFi.kext
-# Graphics stack (nextbsd-kernel-modules#30). GFX_TEST=0 skips those stages, so
+# Graphics stack (nextbsd-kernel-extensions#30). GFX_TEST=0 skips those stages, so
 # the PoC still runs on images/branches without the graphics kexts injected.
 GFX_TEST=${GFX_TEST:-1}
 BOCHS_PATH=/System/Library/Extensions/BochsGraphics.kext

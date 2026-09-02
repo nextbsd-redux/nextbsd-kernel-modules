@@ -1,6 +1,6 @@
-# nextbsd-kernel-modules
+# nextbsd-kernel-extensions
 
-Builds NextBSD kernel modules layered on the kernel `obj` tree, inside the
+Builds NextBSD kernel extensions layered on the kernel `obj` tree, inside the
 SHA-pinned [`nextbsd-kernel-toolchain`](https://github.com/nextbsd-redux/nextbsd-kernel-toolchain)
 container.
 
@@ -19,3 +19,10 @@ from the same patched source the kernel was built from.
 
 Set `client_payload[release]=true` on the dispatch to also publish a
 `tar.gz` of the modules to GitHub Releases.
+
+## Name
+
+Modules are built here and packaged as `.kext` bundles; the assembled package
+in `nextbsd-pkg` is `NextBSD-kernel-extensions`, and this repository is named to
+match. It was `nextbsd-kernel-modules` until 2026-09-01; GitHub redirects the
+old URL.

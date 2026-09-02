@@ -1,4 +1,4 @@
-name: Build NextBSD Modules
+name: Build NextBSD Kernel Extensions
 on:
   repository_dispatch:
     types: [kernel-updated]
@@ -170,7 +170,7 @@ jobs:
           # Per-arch tag so the two matrix legs don't collide on one release.
           gh release create "v$(date +%Y%m%d)-modules-${{ matrix.target }}" \
             /tmp/nextbsd-modules-${{ matrix.target }}.tar.gz \
-            --repo nextbsd-redux/nextbsd-kernel-modules \
+            --repo nextbsd/nextbsd-kernel-extensions \
             --title "NextBSD Modules ${{ matrix.target }} $(date +%Y-%m-%d)" \
             --notes "Built against FreeBSD ${FREEBSD_BRANCH}"
         env:
