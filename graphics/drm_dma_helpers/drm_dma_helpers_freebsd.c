@@ -39,3 +39,12 @@ LKPI_DRIVER_MODULE(drm_dma_helpers, drm_dma_helpers_init,
 MODULE_VERSION(drm_dma_helpers, 1);
 MODULE_DEPEND(drm_dma_helpers, drmn, 2, 2, 2);
 MODULE_DEPEND(drm_dma_helpers, linuxkpi, 1, 1, 1);
+
+/*
+ * dmabuf, for the same reason drm_shmem_helpers carries it: the PRIME import
+ * and vmap paths here reference real dma_buf symbols --
+ * dma_buf_vmap_unlocked(), dma_buf_vunmap_unlocked() and dma_buf_attachment --
+ * so the edge is load-bearing, not decorative. MODULE_DEPEND is depth-1, so it
+ * has to be stated here rather than inherited through drmn.
+ */
+MODULE_DEPEND(drm_dma_helpers, dmabuf, 1, 1, 1);
