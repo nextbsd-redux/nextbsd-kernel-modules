@@ -554,6 +554,46 @@ jobs:
       # one is required by the boot test (BochsGraphics resolves through
       # IOGraphicsExtras), so an error in this unproven code must not be able to
       # take the working driver down with it.
+      # EXPERIMENTAL (graphics kext series): the contiguous-DMA GEM layer, for
+      # the Raspberry Pi display path (nextbsd-kernel#176). Separate module and
+      # separate step from the other two helpers on purpose -- drm_extra_helpers
+      # is load-bearing for the boot test via IOGraphicsExtras, so a compile
+      # error in new code must not be able to take it down.
+      #
+      # continue-on-error, like its siblings: this is a build-gap probe first
+      # and a deliverable second. A failure here should surface in the summary
+      # below rather than fail the whole graphics job.
+      - name: Build drm_dma_helpers.ko (contiguous-DMA GEM)
+        continue-on-error: true
+        run: |
+          set -eu
+          cp nbkm-tools/graphics/drivers/gpu/drm/*.c /tmp/drm-kmod/drivers/gpu/drm/
+          cp nbkm-tools/graphics/include/drm/*.h     /tmp/drm-kmod/include/drm/
+          cp -R nbkm-tools/graphics/drm_dma_helpers /tmp/drm-kmod/
+          NPROC=$(nproc)
+          cd /usr/src
+          ./tools/build/make.py \
+            --cross-bindir="${CROSS_BINDIR}" \
+            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=NEXTBSD \
+            buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod/drm_dma_helpers -j${NPROC} SYSDIR=/usr/src/sys" \
+            2>&1 | tee /tmp/dma-helpers-build.log
+          cp /tmp/drm-kmod/drm_dma_helpers/drm_dma_helpers.ko /tmp/ko-out/ 2>/dev/null || true
+
+      - name: Summarize DMA helper build gaps
+        continue-on-error: true
+        run: |
+          set +e
+          echo "=== drm_dma_helpers.ko ==="
+          if [ -f /tmp/drm-kmod/drm_dma_helpers/drm_dma_helpers.ko ]; then
+            echo "BUILT"
+            ls -la /tmp/drm-kmod/drm_dma_helpers/drm_dma_helpers.ko
+          else
+            echo "NOT BUILT -- first errors:"
+            grep -E "error:|fatal error:" /tmp/dma-helpers-build.log 2>/dev/null | head -30
+            echo "--- missing headers, if any ---"
+            grep -oE "'[a-z0-9_/.-]+\.h' file not found" /tmp/dma-helpers-build.log 2>/dev/null | sort -u | head -20
+          fi
+
       - name: Build drm_shmem_helpers.ko (shmem GEM + fbdev)
         continue-on-error: true
         run: |
