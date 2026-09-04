@@ -191,10 +191,20 @@ vc4_fkms_attach(device_t dev)
 	sc->irq_rid = 0;
 	sc->irq_res = bus_alloc_resource_any(dev, SYS_RES_IRQ, &sc->irq_rid,
 	    RF_ACTIVE | RF_SHAREABLE);
-	if (sc->irq_res != NULL)
+	if (sc->irq_res != NULL) {
 		sc->pdev.dev.irq = rman_get_start(sc->irq_res);
-	else
+		/*
+		 * Read the number, then hand the resource back. fkms registers
+		 * its own handler with devm_request_irq(), which allocates the
+		 * same rid itself -- holding it here makes that allocation fail
+		 * and the interrupt is silently lost.
+		 */
+		bus_release_resource(dev, SYS_RES_IRQ, sc->irq_rid,
+		    sc->irq_res);
+		sc->irq_res = NULL;
+	} else {
 		sc->pdev.dev.irq = LINUX_IRQ_INVALID;
+	}
 
 	/*
 	 * The master. devm_drm_dev_alloc() ties the drm_device's lifetime to
