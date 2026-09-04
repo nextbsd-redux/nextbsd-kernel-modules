@@ -1,0 +1,47 @@
+dma-buf: add the _unlocked vmap/vunmap wrappers
+
+drm_gem_dma_helper.c:233 calls dma_buf_vunmap_unlocked() when freeing a GEM
+object that came in over PRIME, and drm-kmod's dma-buf declares only the bare
+dma_buf_vmap()/dma_buf_vunmap(). The DMA GEM helpers therefore fail to compile
+with "call to undeclared function 'dma_buf_vunmap_unlocked'" -- one of the
+five symbols blocking a KMS driver for the Pi 5 (nextbsd-kernel#176).
+
+Upstream Linux split these in 6.2: dma_buf_vmap() asserts dma_resv_held() and
+the _unlocked form takes the reservation lock around it. This port never made
+that split -- dma_buf_vmap() and dma_buf_vunmap() each take dmabuf->lock
+themselves (dma-buf.c:726 and :759) and neither asserts the reservation lock.
+
+So these are aliases, deliberately. They do NOT take dma_resv_lock() the way
+dma_buf_map_attachment_unlocked() a few lines above does, because the
+functions they wrap already do their own locking, and wrapping them in a
+second unrelated lock would invent an ordering the locked forms know nothing
+about. The name is the only thing being added.
+
+--- a/linuxkpi/gplv2/include/linux/dma-buf.h
++++ b/linuxkpi/gplv2/include/linux/dma-buf.h
+@@ -189,4 +189,25 @@
+ int dma_buf_vmap(struct dma_buf *dmabuf, struct iosys_map *map);
+ void dma_buf_vunmap(struct dma_buf *dmabuf, struct iosys_map *map);
+ 
++/*
++ * The _unlocked forms the DRM helpers call. Upstream these take the
++ * reservation lock around a dma_buf_vmap() that asserts dma_resv_held(); this
++ * port's dma_buf_vmap()/dma_buf_vunmap() instead take dmabuf->lock themselves
++ * and assert nothing, so there is no second lock to acquire and none is taken
++ * here on purpose.
++ */
++static inline int
++dma_buf_vmap_unlocked(struct dma_buf *dmabuf, struct iosys_map *map)
++{
++
++	return (dma_buf_vmap(dmabuf, map));
++}
++
++static inline void
++dma_buf_vunmap_unlocked(struct dma_buf *dmabuf, struct iosys_map *map)
++{
++
++	dma_buf_vunmap(dmabuf, map);
++}
++
+ #endif /* _LINUX_GPLV2_DMA_BUF_H_ */

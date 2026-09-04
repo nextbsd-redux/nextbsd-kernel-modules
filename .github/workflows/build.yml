@@ -55,7 +55,7 @@ env:
   # and keeps reporting its gaps without failing anything -- which is how
   # drm_dma_helpers should behave until nextbsd-kernel#181 lands the linuxkpi
   # symbols it needs. Add it here once it builds.
-  REQUIRED_KOS: "drm_extra_helpers bochs vboxvideo linux_virtio drm_shmem_helpers virtio_gpu_drm"
+  REQUIRED_KOS: "drm_extra_helpers bochs vboxvideo linux_virtio drm_shmem_helpers virtio_gpu_drm drm_dma_helpers"
 
 jobs:
   modules:
@@ -607,6 +607,60 @@ jobs:
       # one is required by the boot test (BochsGraphics resolves through
       # IOGraphicsExtras), so an error in this unproven code must not be able to
       # take the working driver down with it.
+      # EXPERIMENTAL (graphics kext series): the contiguous-DMA GEM layer, for
+      # the Raspberry Pi display path (nextbsd-kernel#176). Separate module and
+      # separate step from the other two helpers on purpose -- drm_extra_helpers
+      # is load-bearing for the boot test via IOGraphicsExtras, so a compile
+      # error in new code must not be able to take it down.
+      #
+      # continue-on-error, like its siblings: this is a build-gap probe first
+      # and a deliverable second. A failure here should surface in the summary
+      # below rather than fail the whole graphics job.
+      - name: Build drm_dma_helpers.ko (contiguous-DMA GEM)
+        continue-on-error: true
+        run: |
+          set -eu
+          cp nbkm-tools/graphics/drivers/gpu/drm/*.c /tmp/drm-kmod/drivers/gpu/drm/
+          cp nbkm-tools/graphics/include/drm/*.h     /tmp/drm-kmod/include/drm/
+          cp -R nbkm-tools/graphics/drm_dma_helpers /tmp/drm-kmod/
+          NPROC=$(nproc)
+          cd /usr/src
+          ./tools/build/make.py \
+            --cross-bindir="${CROSS_BINDIR}" \
+            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=NEXTBSD \
+            buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod/drm_dma_helpers -j${NPROC} SYSDIR=/usr/src/sys" \
+            2>&1 | tee /tmp/dma-helpers-build.log
+          cp /tmp/drm-kmod/drm_dma_helpers/drm_dma_helpers.ko /tmp/ko-out/ 2>/dev/null || true
+
+      - name: Summarize DMA helper build gaps
+        # if: always(), NOT continue-on-error -- this step carries the gate, and
+        # continue-on-error would swallow its exit 1 exactly the way it swallowed
+        # the compile failures this module spent two runs hiding. Matches the
+        # other five summarize steps.
+        if: always()
+        run: |
+          set +e
+          echo "=== drm_dma_helpers.ko ==="
+          if [ -f /tmp/drm-kmod/drm_dma_helpers/drm_dma_helpers.ko ]; then
+            echo "BUILT"
+            ls -la /tmp/drm-kmod/drm_dma_helpers/drm_dma_helpers.ko
+          else
+            echo "NOT BUILT -- first errors:"
+            grep -E "error:|fatal error:" /tmp/dma-helpers-build.log 2>/dev/null | head -30
+            echo "--- missing headers, if any ---"
+            grep -oE "'[a-z0-9_/.-]+\.h' file not found" /tmp/dma-helpers-build.log 2>/dev/null | sort -u | head -20
+          fi
+          # Gate, same as the other required modules. drm_dma_helpers builds as
+          # of nextbsd-kernel#181 + #182, so a missing .ko is now a regression
+          # rather than a measurement.
+          case " $REQUIRED_KOS " in
+            *" drm_dma_helpers "*)
+              if [ ! -f /tmp/drm-kmod/drm_dma_helpers/drm_dma_helpers.ko ]; then
+                echo "::error::drm_dma_helpers.ko did not build -- see the errors above"
+                exit 1
+              fi ;;
+          esac
+
       - name: Build drm_shmem_helpers.ko (shmem GEM + fbdev)
         continue-on-error: true
         run: |
@@ -913,6 +967,18 @@ jobs:
           if [ -f "$KO/drm_shmem_helpers.ko" ]; then
             "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.dmabuf \
                  "$KO/drm_shmem_helpers.ko" IOGraphicsShmem org.nextbsd.kext.iographicsshmem
+          fi
+          # IOGraphicsDMA is the contiguous-DMA GEM layer (nextbsd-kernel#176:
+          # the Raspberry Pi display path). Wrapped here for the same reason as
+          # the two above, and for one more: /tmp/ko-out is uploaded as an
+          # artifact BEFORE any of the helper builds run, so a helper that is
+          # never wrapped leaves no trace anywhere and its build result cannot
+          # be observed at all. Same dependency shape as IOGraphicsShmem and for
+          # the same reasons -- drm core plus dmabuf, and NO TTM, since these
+          # buffers are contiguous system memory rather than a device BAR.
+          if [ -f "$KO/drm_dma_helpers.ko" ]; then
+            "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.dmabuf \
+                 "$KO/drm_dma_helpers.ko" IOGraphicsDMA org.nextbsd.kext.iographicsdma
           fi
           if [ -f "$KO/virtio_gpu_drm.ko" ] && [ -f pers/VirtIOGraphics.iokitpersonalities ]; then
             "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.dmabuf \
