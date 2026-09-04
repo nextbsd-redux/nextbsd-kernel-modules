@@ -27,6 +27,9 @@
 #include <arm/broadcom/bcm2835/bcm2835_mbox_prop.h>
 
 #include <linux/device.h>
+#include <linux/err.h>
+#include <linux/io.h>
+#include <linux/platform_device.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/slab.h>
@@ -131,6 +134,30 @@ rpi_firmware_property_list(struct rpi_firmware *fw, void *data, size_t tag_size)
 
 	free(hdr, M_DEVBUF);
 	return (error == 0 ? 0 : -error);
+}
+
+/*
+ * The one vc4 symbol vc4_firmware_kms.c needs from outside itself -- measured,
+ * it is the only one of 55 vc4_* calls not defined in that file.
+ *
+ * It maps the SMI interrupt register, and only on pre-BCM2712 parts:
+ *
+ *	if (fkms->revision >= BCM2712) {
+ *		devm_request_irq(..., vc4_crtc2712_irq_handler, ...);
+ *	} else {
+ *		crtc_list[0]->regs = vc4_ioremap_regs(pdev, 0);   <- here
+ *
+ * A Pi 5 always takes the first branch, so this exists to satisfy the linker
+ * rather than to run. It returns an error pointer, which is what the call site
+ * tests for -- though note the caller only logs and carries on, so an older Pi
+ * reaching this would fault on the next line. That is honest: this port
+ * targets BCM2712 and the earlier path has never been exercised.
+ */
+void __iomem *
+vc4_ioremap_regs(struct platform_device *pdev, int index)
+{
+
+	return (ERR_PTR(-ENODEV));
 }
 
 void
