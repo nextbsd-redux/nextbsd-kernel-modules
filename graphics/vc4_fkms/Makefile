@@ -78,8 +78,19 @@ CFLAGS+= ${KCONFIG:C/(.*)/-DCONFIG_\1/}
 # which is exactly what the first compile probe did, silently.
 CFLAGS+= -DCONFIG_RASPBERRYPI_FIRMWARE=1
 
+# FreeBSD has an MMU. Without this, drm_gem_dma_helper.h's
+# DEFINE_DRM_GEM_DMA_FOPS emits .get_unmapped_area, which is the no-MMU path
+# and a field linuxkpi's struct file_operations does not have.
+CFLAGS+= -DCONFIG_MMU=1
+
 # The hw.vc4_fkms sysctl node has to be visible in the vendored driver's
 # translation unit, which is not ours to edit -- see vc4_fkms_param.h.
 CFLAGS+= -include ${.CURDIR}/vc4_fkms_param.h
 
+# vc4_firmware_kms.c:1951 does
+#     fkms->revision = (enum vc4_fkms_revision)match->data;
+# where of_device_id::data is a const void *. That is how Linux stores
+# per-variant data in a match table, and narrowing it to an enum is what every
+# driver using the pattern does; clang objects to the width, not the intent.
 CWARNFLAGS += -Wno-pointer-arith -Wno-format -Wno-cast-qual
+CWARNFLAGS += -Wno-void-pointer-to-enum-cast

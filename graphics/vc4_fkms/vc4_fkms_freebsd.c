@@ -153,6 +153,13 @@ rpi_firmware_property_list(struct rpi_firmware *fw, void *data, size_t tag_size)
  * reaching this would fault on the next line. That is honest: this port
  * targets BCM2712 and the earlier path has never been exercised.
  */
+/*
+ * Declared here rather than by including vc4_drv.h: that header pulls the
+ * whole DRM stack in for one prototype, and this file is deliberately the
+ * FreeBSD side of the module.
+ */
+void __iomem *vc4_ioremap_regs(struct platform_device *pdev, int index);
+
 void __iomem *
 vc4_ioremap_regs(struct platform_device *pdev, int index)
 {
