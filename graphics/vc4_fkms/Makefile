@@ -33,7 +33,8 @@ KMOD=	vc4_fkms
 EXPORT_SYMS=	YES
 
 SRCS=	\
-	vc4_firmware_kms.c
+	vc4_firmware_kms.c \
+	vc4_fkms_freebsd.c
 
 SRCS	+=			\
 	opt_acpi.h		\
@@ -70,5 +71,9 @@ CFLAGS+= -I${.CURDIR:H}/drivers/gpu -I${SRCDIR}
 CFLAGS+= '-DKBUILD_MODNAME="${KMOD}"'
 CFLAGS+= '-DLINUXKPI_PARAM_PREFIX=vc4_fkms_' -DDRM_SYSCTL_PARAM_PREFIX=_${KMOD}
 CFLAGS+= ${KCONFIG:C/(.*)/-DCONFIG_\1/}
+# Without this the vendored raspberrypi-firmware.h supplies static inlines
+# returning -ENOSYS, and all 11 rpi_firmware_* call sites bind to stubs --
+# which is exactly what the first compile probe did, silently.
+CFLAGS+= -DCONFIG_RASPBERRYPI_FIRMWARE=1
 
 CWARNFLAGS += -Wno-pointer-arith -Wno-format -Wno-cast-qual

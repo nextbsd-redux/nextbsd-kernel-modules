@@ -1,0 +1,141 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * FreeBSD glue for vc4_firmware_kms (nextbsd-kernel#176).
+ *
+ * The driver talks to the VideoCore firmware over the property mailbox, which
+ * FreeBSD already implements -- this maps the three rpi_firmware_* entry
+ * points onto it. Same mailbox, same tags, different spelling.
+ *
+ * Worth recording why this file has to exist at all rather than the driver
+ * just working: the vendored raspberrypi-firmware.h gates its declarations on
+ * IS_ENABLED(CONFIG_RASPBERRYPI_FIRMWARE), and with that undefined the header
+ * supplies static inlines returning -ENOSYS. The compile probe therefore went
+ * green on all 11 rpi_firmware_* call sites while binding them to stubs. The
+ * Makefile now defines CONFIG_RASPBERRYPI_FIRMWARE, which is what makes these
+ * definitions the ones that get used.
+ */
+
+#include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/bus.h>
+#include <sys/malloc.h>
+
+#include <dev/ofw/openfirm.h>
+#include <dev/ofw/ofw_bus.h>
+
+#include <arm/broadcom/bcm2835/bcm2835_firmware.h>
+#include <arm/broadcom/bcm2835/bcm2835_mbox_prop.h>
+
+#include <linux/device.h>
+#include <linux/module.h>
+#include <linux/of.h>
+#include <linux/slab.h>
+
+#include <soc/bcm2835/raspberrypi-firmware.h>
+
+/*
+ * Linux keeps this opaque and hands the pointer back to every call. All we
+ * need behind it is the FreeBSD device that owns the mailbox.
+ */
+struct rpi_firmware {
+	device_t	dev;
+};
+
+/*
+ * Resolve the "brcm,firmware" phandle to the bcm2835_firmware(4) instance.
+ *
+ * That driver calls OF_device_register_xref() during attach
+ * (bcm2835_firmware.c:98), so the node-to-device lookup is available as soon
+ * as it has probed. If it has not, returning NULL gives the caller the
+ * -EPROBE_DEFER path it already has for exactly this case.
+ *
+ * devm_ in the Linux name means the allocation is freed when the device is;
+ * this uses plain malloc because the lifetime here is the module's, and the
+ * driver never frees it.
+ */
+struct rpi_firmware *
+devm_rpi_firmware_get(struct device *dev, struct device_node *firmware_node)
+{
+	struct rpi_firmware *fw;
+	device_t fwdev;
+
+	if (firmware_node == NULL)
+		return (NULL);
+
+	fwdev = OF_device_from_xref(OF_xref_from_node(
+	    (phandle_t)firmware_node->node));
+	if (fwdev == NULL)
+		return (NULL);
+
+	fw = malloc(sizeof(*fw), M_DEVBUF, M_NOWAIT | M_ZERO);
+	if (fw == NULL)
+		return (NULL);
+	fw->dev = fwdev;
+	return (fw);
+}
+
+/*
+ * One tag, request and reply in the same buffer. bcm2835_firmware_property()
+ * builds the header, sends it and copies the reply back over *data, which is
+ * precisely rpi_firmware_property()'s contract.
+ *
+ * Returns a negative errno, as Linux callers expect, rather than FreeBSD's
+ * positive convention.
+ */
+int
+rpi_firmware_property(struct rpi_firmware *fw, u32 tag, void *data, size_t len)
+{
+	int error;
+
+	if (fw == NULL || fw->dev == NULL)
+		return (-ENODEV);
+
+	error = bcm2835_firmware_property(fw->dev, tag, data, len);
+	return (error == 0 ? 0 : -error);
+}
+
+/*
+ * A pre-built sequence of tags, which the caller has already laid out. Only
+ * the enclosing message header is ours to add.
+ *
+ * The buffer sent is header + tags + the terminating zero word, and the reply
+ * is copied back over the caller's tags so it can read the values it asked
+ * for -- the same in-place convention as the single-tag call.
+ */
+int
+rpi_firmware_property_list(struct rpi_firmware *fw, void *data, size_t tag_size)
+{
+	struct bcm2835_mbox_hdr *hdr;
+	size_t msg_size;
+	int error;
+
+	if (fw == NULL || fw->dev == NULL)
+		return (-ENODEV);
+	/* The mailbox moves 32-bit words; a ragged tail is a caller bug. */
+	if ((tag_size & (sizeof(uint32_t) - 1)) != 0)
+		return (-EINVAL);
+
+	msg_size = sizeof(*hdr) + tag_size + sizeof(uint32_t);
+	hdr = malloc(msg_size, M_DEVBUF, M_NOWAIT | M_ZERO);
+	if (hdr == NULL)
+		return (-ENOMEM);
+
+	hdr->buf_size = msg_size;
+	hdr->code = BCM2835_MBOX_CODE_REQ;
+	memcpy(hdr + 1, data, tag_size);
+	/* End tag: the zeroed word after the copy already is one. */
+
+	error = bcm2835_mbox_property(hdr, msg_size);
+	if (error == 0)
+		memcpy(data, hdr + 1, tag_size);
+
+	free(hdr, M_DEVBUF);
+	return (error == 0 ? 0 : -error);
+}
+
+void
+rpi_firmware_put(struct rpi_firmware *fw)
+{
+
+	free(fw, M_DEVBUF);
+}
