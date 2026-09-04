@@ -55,7 +55,7 @@ env:
   # and keeps reporting its gaps without failing anything -- which is how
   # drm_dma_helpers should behave until nextbsd-kernel#181 lands the linuxkpi
   # symbols it needs. Add it here once it builds.
-  REQUIRED_KOS: "drm_extra_helpers bochs vboxvideo linux_virtio drm_shmem_helpers virtio_gpu_drm drm_dma_helpers"
+  REQUIRED_KOS: "drm_extra_helpers bochs vboxvideo linux_virtio drm_shmem_helpers virtio_gpu_drm drm_dma_helpers vc4_fkms"
 
 jobs:
   modules:
@@ -668,7 +668,7 @@ jobs:
       # build was before its shims landed.
       #
       # Deliberately NOT in REQUIRED_KOS: nothing here is supposed to build yet.
-      - name: Build vc4_fkms.ko (COMPILE PROBE -- expected to fail)
+      - name: Build vc4_fkms.ko (VideoCore firmware KMS)
         # arm64 only. The glue calls bcm2835_firmware_property() and
         # bcm2835_mbox_property(), which exist only in an arm64 kernel -- the
         # headers are in the tree on every arch, so this compiles on amd64 and
@@ -694,8 +694,12 @@ jobs:
             TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=NEXTBSD \
             buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod/vc4_fkms -j${NPROC} SYSDIR=/usr/src/sys" \
             2>&1 | tee /tmp/fkms-build.log
+          # Stage it with the others so it is uploaded and, more usefully, so
+          # the symbol-resolution check runs over it -- that is the closest
+          # thing to a load test we get before hardware.
+          cp /tmp/drm-kmod/vc4_fkms/vc4_fkms.ko /tmp/ko-out/ 2>/dev/null || true
 
-      - name: Summarize fkms probe gaps (the deliverable)
+      - name: Summarize fkms build
         if: always() && matrix.target == 'arm64'
         run: |
           set +e
@@ -721,6 +725,15 @@ jobs:
           echo "=== error count ==="
           ERRS=$(grep -c ": error:" /tmp/fkms-build.log 2>/dev/null) || ERRS=0
           echo "$ERRS"
+          # It builds as of nextbsd-kernel#183 + #184, so a missing .ko is now
+          # a regression rather than a measurement.
+          case " $REQUIRED_KOS " in
+            *" vc4_fkms "*)
+              if [ ! -f /tmp/drm-kmod/vc4_fkms/vc4_fkms.ko ]; then
+                echo "::error::vc4_fkms.ko did not build -- see the gaps above"
+                exit 1
+              fi ;;
+          esac
 
       - name: Build drm_shmem_helpers.ko (shmem GEM + fbdev)
         continue-on-error: true
