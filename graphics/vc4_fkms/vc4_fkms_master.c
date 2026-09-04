@@ -250,10 +250,17 @@ vc4_fkms_detach(device_t dev)
 {
 	struct vc4_fkms_softc *sc = device_get_softc(dev);
 
-	if (sc->vc4 != NULL)
+	/*
+	 * Unwind in reverse. sc->vc4 is NULL if attach failed before the
+	 * drm_device existed, and component_unbind_all() would dereference it
+	 * for the master data -- so both uses are guarded on the same check
+	 * rather than only the first.
+	 */
+	if (sc->vc4 != NULL) {
 		drm_dev_unregister(&sc->vc4->base);
-	if (sc->bound)
-		component_unbind_all(&sc->master, &sc->vc4->base);
+		if (sc->bound)
+			component_unbind_all(&sc->master, &sc->vc4->base);
+	}
 	vc4_firmware_kms_driver.remove(&sc->pdev);
 	if (sc->irq_res != NULL)
 		bus_release_resource(dev, SYS_RES_IRQ, sc->irq_rid,
