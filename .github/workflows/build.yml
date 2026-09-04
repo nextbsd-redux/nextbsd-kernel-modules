@@ -669,6 +669,12 @@ jobs:
       #
       # Deliberately NOT in REQUIRED_KOS: nothing here is supposed to build yet.
       - name: Build vc4_fkms.ko (COMPILE PROBE -- expected to fail)
+        # arm64 only. The glue calls bcm2835_firmware_property() and
+        # bcm2835_mbox_property(), which exist only in an arm64 kernel -- the
+        # headers are in the tree on every arch, so this compiles on amd64 and
+        # then fails to link. Same arrangement as bochs and vboxvideo, which
+        # are amd64 only.
+        if: matrix.target == 'arm64'
         continue-on-error: true
         run: |
           set -eu
@@ -690,7 +696,7 @@ jobs:
             2>&1 | tee /tmp/fkms-build.log
 
       - name: Summarize fkms probe gaps (the deliverable)
-        if: always()
+        if: always() && matrix.target == 'arm64'
         run: |
           set +e
           echo "=== vc4_fkms.ko ==="
