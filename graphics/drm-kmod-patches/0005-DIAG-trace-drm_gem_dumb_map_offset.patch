@@ -1,0 +1,54 @@
+DIAGNOSTIC (not for merge): trace drm_gem_dumb_map_offset
+
+DRM_IOCTL_MODE_MAP_DUMB panics on a device-tree DRM device
+(nextbsd-kernel#176):
+
+	panic: vm_fault failed: 0xffff0000007d8d00 error 1
+	#5 drm_gem_dumb_map_offset+0x2c
+	#6 drm_ioctl_kernel -> drm_ioctl
+
+Two things are already established by testing rather than reading:
+
+  MAP_DUMB with a bogus handle returns ENOENT cleanly, so the
+  spin_lock(&filp->table_lock) and idr_find() in objects_lookup() are fine.
+
+  DESTROY_DUMB on a real handle works, and it does the same lookup plus a
+  reference drop -- so lookup with a real object is fine too.
+
+That leaves drm_gem_create_mmap_offset(), and guessing which pointer inside
+it is bad has not converged. This prints the object, its device, the vma
+offset manager and the return code so the next run says which one.
+
+Revert before merging.
+--- a/drivers/gpu/drm/drm_gem.c
++++ b/drivers/gpu/drm/drm_gem.c
+@@ -371,20 +371,29 @@
+ 	int ret;
+ 
+ 	obj = drm_gem_object_lookup(file, handle);
++	printf("fkms-dbg: map_offset handle=%u obj=%p\n", handle, obj);
+ 	if (!obj)
+ 		return -ENOENT;
+ 
++	printf("fkms-dbg:   obj->dev=%p size=%zu import_attach=%p\n",
++	    obj->dev, (size_t)obj->size, obj->import_attach);
++	printf("fkms-dbg:   vma_offset_manager=%p funcs=%p\n",
++	    obj->dev != NULL ? obj->dev->vma_offset_manager : NULL, obj->funcs);
++
+ 	/* Don't allow imported objects to be mapped */
+ 	if (drm_gem_is_imported(obj)) {
+ 		ret = -EINVAL;
+ 		goto out;
+ 	}
+ 
++	printf("fkms-dbg:   calling drm_gem_create_mmap_offset\n");
+ 	ret = drm_gem_create_mmap_offset(obj);
++	printf("fkms-dbg:   create_mmap_offset ret=%d\n", ret);
+ 	if (ret)
+ 		goto out;
+ 
+ 	*offset = drm_vma_node_offset_addr(&obj->vma_node);
++	printf("fkms-dbg:   offset=0x%llx\n", (unsigned long long)*offset);
+ out:
+ 	drm_gem_object_put(obj);
+ 
