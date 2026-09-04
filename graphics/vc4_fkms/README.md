@@ -38,63 +38,95 @@ drm_*/drmm_*          53 distinct all present in drm-kmod 6.12-lts
 
 ## Testing on hardware
 
-The node ships disabled, so nothing happens without the overlay:
+NextBSD has no `kldload` -- kexts are the delivery mechanism. Everything below
+is `kextload` against bundles in `/System/Library/Extensions`.
 
-```
-ofwbus0: <firmwarekms> irq 12 disabled compat raspberrypi,rpi-firmware-kms-2712 (no driver attached)
-```
+You need two artifacts from the same CI run family:
 
-**1. Install the overlay.** On the FAT boot partition (`nda0s1` on an NVMe
-install, `da0s1` on a card):
+| artifact | from | contains |
+|---|---|---|
+| `rpi5-kernel8-arm64.img` | nextbsd-kernel `continuous` | the kernel, with the linuxkpi work in #183/#184 |
+| `graphics-kexts-arm64` | nextbsd-kernel-extensions | `VideoCoreKMS.kext` and its dependencies |
+
+The kexts must come from a build against **that** kernel. A kext built against
+a different one fails at load with ENOEXEC on unresolved symbols, which is the
+check `Check every kext resolves` runs in CI for the PCI drivers and which this
+bundle -- being loaded explicitly rather than matched -- does not get.
+
+**1. Kernel.** Boot partition is `nda0s1` on an NVMe install, `da0s1` on a card:
 
 ```sh
 mkdir -p /mnt/boot && mount_msdosfs /dev/nda0s1 /mnt/boot
+cp /mnt/boot/kernel8.img /mnt/boot/kernel8.prev      # rollback
+cp /path/to/rpi5-kernel8-arm64.img /mnt/boot/kernel8.img
+```
+
+**2. Overlay**, so the node stops being disabled:
+
+```sh
 mkdir -p /mnt/boot/overlays
 cp nextbsd-fkms.dtbo /mnt/boot/overlays/
-cp /mnt/boot/config.txt /mnt/boot/config.nofkms      # one-line rollback
+cp /mnt/boot/config.txt /mnt/boot/config.nofkms      # rollback
 printf 'dtoverlay=nextbsd-fkms\n' >> /mnt/boot/config.txt
 umount /mnt/boot
 ```
 
-**2. Reboot and check the node is live.** Before loading anything:
+**3. Kexts.** Order does not matter -- `OSBundleLibraries` resolves the
+dependency graph -- but all four must be present:
+
+```sh
+cd /System/Library/Extensions
+tar xf /path/to/graphics-kexts-arm64.zip     # or copy the bundles in
+chown -R root:wheel DMABuf.kext IOGraphics.kext IOGraphicsDMA.kext VideoCoreKMS.kext
+chmod -R go-w      DMABuf.kext IOGraphics.kext IOGraphicsDMA.kext VideoCoreKMS.kext
+```
+
+Then reboot.
+
+**4. Confirm the node is live**, before loading anything:
 
 ```sh
 dmesg | grep -i firmwarekms
 ```
 
-`disabled` should be gone. If it still says `disabled`, the overlay did not
-apply and nothing after this will work — check that `overlays/` is on the same
-partition as `config.txt`.
+`disabled` should be gone. If it is still there the overlay did not apply and
+nothing below will work -- check `overlays/` is on the same partition as
+`config.txt`.
 
-**3. Load the driver.**
+**5. Load it.**
 
 ```sh
-kldload drm_dma_helpers
-kldload vc4_fkms
+kextload /System/Library/Extensions/VideoCoreKMS.kext
+kextstat | grep -i videocore
 dmesg | tail -20
 ```
 
-Expect `vc4_fkms0: <VideoCore firmware KMS>` and a line reporting the CRTC
-count. `/dev/dri/card0` should appear.
+`kextload: loaded` is the first real test of load-time symbol resolution --
+CI proves the link, not the load. An ENOEXEC here means a symbol the kernel
+does not have, and `dmesg` names it.
 
-**4. What success looks like.**
+Expect `vc4_fkms0: <VideoCore firmware KMS>` and a line reporting the CRTC
+count.
+
+**6. What success looks like.**
 
 ```sh
 ls -l /dev/dri/
 ```
 
-That device node is the whole point: X's `modesetting` driver binds to it
-instead of falling back to `scfb`, which is what nextbsd#425 (scfb segfaults
-at 16bpp) and gershwin-windowmanager#70 (software compositing saturating
-Xorg) both come back to.
+That device node is the point: X's `modesetting` driver binds to it instead of
+falling back to `scfb`, which is what nextbsd#425 (scfb segfaults at 16bpp) and
+gershwin-windowmanager#70 (software compositing saturating Xorg) both come back
+to.
 
-**Rollback** is `cp /mnt/boot/config.nofkms /mnt/boot/config.txt` and reboot.
-The driver is a module, so not loading it is also a rollback.
+**Rollback** is per layer: `cp /mnt/boot/config.nofkms /mnt/boot/config.txt`
+for the overlay, `cp /mnt/boot/kernel8.prev /mnt/boot/kernel8.img` for the
+kernel, and simply not loading the kext for the driver.
 
 ## Honest state
 
-Nothing above has run on hardware yet. The order in which this can fail, and
-none of it is knowable from a build:
+The module builds and links; nothing above has run on hardware. The order in
+which this can fail, none of it knowable from a build:
 
 1. the module may not link — `vc4_firmware_kms.c` calls vc4 helpers that live
    in files not vendored here

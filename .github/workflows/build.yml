@@ -1070,6 +1070,24 @@ jobs:
             "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.dmabuf \
                  "$KO/drm_dma_helpers.ko" IOGraphicsDMA org.nextbsd.kext.iographicsdma
           fi
+          # VideoCoreKMS -- the Raspberry Pi 5 firmware KMS driver
+          # (nextbsd-kernel#176). arm64 only, since the module calls
+          # bcm2835_firmware_property()/bcm2835_mbox_property().
+          #
+          # NO IOKitPersonalities, deliberately. The in-kernel catalogue matches
+          # PCI only -- iocatalogue.h defines exactly one provider class,
+          # IOCAT_PROVIDER_IOPCIDEVICE, and matching is by a 0x<device><vendor>
+          # word -- and firmwarekms is a device tree node, not a PCI function.
+          # So there is nothing for kextd to auto-match on, and binding instead
+          # happens through newbus once the module is loaded: the driver
+          # registers DRIVER_MODULE(..., ofwbus, ...) and attaches to the node
+          # directly. That makes this an explicitly kextload'ed bundle, like the
+          # library kexts above rather than like VirtIOGraphics below.
+          if [ -f "$KO/vc4_fkms.ko" ]; then
+            "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.dmabuf \
+                 -l org.nextbsd.kext.iographicsdma \
+                 "$KO/vc4_fkms.ko" VideoCoreKMS org.nextbsd.kext.videocorekms
+          fi
           if [ -f "$KO/virtio_gpu_drm.ko" ] && [ -f pers/VirtIOGraphics.iokitpersonalities ]; then
             "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.dmabuf \
                  -l org.nextbsd.kext.iographicsextras \
