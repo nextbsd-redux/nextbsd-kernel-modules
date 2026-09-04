@@ -31,6 +31,8 @@
 #include <sys/rman.h>
 #include <sys/sysctl.h>
 
+#include "vc4_fkms_param.h"
+
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>

@@ -49,6 +49,7 @@ SRCS	+=			\
 	fb_if.h			\
 	device_if.h		\
 	pci_if.h		\
+	ofw_bus_if.h		\
 	vnode_if.h
 
 CLEANFILES+= ${KMOD}.ko.full ${KMOD}.ko.debug
@@ -76,5 +77,9 @@ CFLAGS+= ${KCONFIG:C/(.*)/-DCONFIG_\1/}
 # returning -ENOSYS, and all 11 rpi_firmware_* call sites bind to stubs --
 # which is exactly what the first compile probe did, silently.
 CFLAGS+= -DCONFIG_RASPBERRYPI_FIRMWARE=1
+
+# The hw.vc4_fkms sysctl node has to be visible in the vendored driver's
+# translation unit, which is not ours to edit -- see vc4_fkms_param.h.
+CFLAGS+= -include ${.CURDIR}/vc4_fkms_param.h
 
 CWARNFLAGS += -Wno-pointer-arith -Wno-format -Wno-cast-qual
