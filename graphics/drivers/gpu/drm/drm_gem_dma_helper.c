@@ -314,7 +314,55 @@ int drm_gem_dma_dumb_create(struct drm_file *file_priv,
 }
 EXPORT_SYMBOL_GPL(drm_gem_dma_dumb_create);
 
+#ifdef __FreeBSD__
+/*
+ * nextbsd-kernel#176: FreeBSD populates an mmap through the VM object's pager,
+ * not at mmap(2) time, so this helper needs a fault handler where Linux needs
+ * none -- Linux's dma_mmap_wc() maps the whole buffer up front.
+ *
+ * Trying to do it Linux's way is what panicked the machine: remap_pfn_range()
+ * on FreeBSD is lkpi_remap_pfn_range(), which opens with
+ * VM_OBJECT_WLOCK(vma->vm_obj), and vm_obj is not set at mmap(2) time.
+ *
+ * The buffer is physically contiguous by construction -- dma_alloc_wc() uses
+ * kmem_alloc_contig() -- so the pfn for any page is simply the base pfn plus
+ * the page offset, with no page array to walk. That is the one way this is
+ * simpler than the shmem helper it is otherwise modelled on.
+ */
+static vm_fault_t drm_gem_dma_fault(struct vm_fault *vmf)
+{
+	struct vm_area_struct *vma = vmf->vma;
+	struct drm_gem_object *obj = vma->vm_private_data;
+	struct drm_gem_dma_object *dma_obj = to_drm_gem_dma_obj(obj);
+	pgoff_t page_offset;
+	vm_fault_t ret;
+
+	/* vmf->pgoff carries the fake mmap offset, so derive it from the address. */
+	page_offset = (vmf->address - vma->vm_start) >> PAGE_SHIFT;
+	if (page_offset >= (obj->size >> PAGE_SHIFT))
+		return (VM_FAULT_SIGBUS);
+	if (dma_obj->vaddr == NULL)
+		return (VM_FAULT_SIGBUS);
+
+	/*
+	 * The locked form, with the VM object write lock held, exactly as
+	 * drm_gem_shmem_fault() and drm-kmod's ttm_bo_vm.c do -- linuxkpi
+	 * poisons the unlocked vmf_insert_pfn_prot() on purpose.
+	 */
+	VM_OBJECT_WLOCK(vma->vm_obj);
+	ret = lkpi_vmf_insert_pfn_prot_locked(vma, vmf->address,
+	    (vtophys(dma_obj->vaddr) >> PAGE_SHIFT) + page_offset,
+	    vma->vm_page_prot);
+	VM_OBJECT_WUNLOCK(vma->vm_obj);
+
+	return (ret);
+}
+#endif
+
 const struct vm_operations_struct drm_gem_dma_vm_ops = {
+#ifdef __FreeBSD__
+	.fault = drm_gem_dma_fault,
+#endif
 	.open = drm_gem_vm_open,
 	.close = drm_gem_vm_close,
 };
@@ -530,6 +578,22 @@ int drm_gem_dma_mmap(struct drm_gem_dma_object *dma_obj, struct vm_area_struct *
 	 * the whole buffer.
 	 */
 	vma->vm_pgoff -= drm_vma_node_start(&obj->vma_node);
+
+#ifdef __FreeBSD__
+	/*
+	 * Set up the mapping and stop. FreeBSD fills it in through
+	 * drm_gem_dma_fault() as pages are touched; mapping eagerly here means
+	 * remap_pfn_range() -> VM_OBJECT_WLOCK(vma->vm_obj) with vm_obj still
+	 * NULL, which is a panic rather than an error. Same shape as
+	 * drm_gem_shmem_mmap().
+	 */
+	vm_flags_set(vma, VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP);
+	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
+	if (!dma_obj->map_noncoherent)
+		vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
+
+	return 0;
+#else
 	vm_flags_mod(vma, VM_DONTEXPAND, VM_PFNMAP);
 
 	if (dma_obj->map_noncoherent) {
@@ -547,6 +611,7 @@ int drm_gem_dma_mmap(struct drm_gem_dma_object *dma_obj, struct vm_area_struct *
 		drm_gem_vm_close(vma);
 
 	return ret;
+#endif
 }
 EXPORT_SYMBOL_GPL(drm_gem_dma_mmap);
 
