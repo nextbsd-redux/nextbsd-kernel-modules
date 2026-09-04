@@ -55,7 +55,7 @@ env:
   # and keeps reporting its gaps without failing anything -- which is how
   # drm_dma_helpers should behave until nextbsd-kernel#181 lands the linuxkpi
   # symbols it needs. Add it here once it builds.
-  REQUIRED_KOS: "drm_extra_helpers bochs vboxvideo linux_virtio drm_shmem_helpers virtio_gpu_drm"
+  REQUIRED_KOS: "drm_extra_helpers bochs vboxvideo linux_virtio drm_shmem_helpers virtio_gpu_drm drm_dma_helpers"
 
 jobs:
   modules:
@@ -633,7 +633,11 @@ jobs:
           cp /tmp/drm-kmod/drm_dma_helpers/drm_dma_helpers.ko /tmp/ko-out/ 2>/dev/null || true
 
       - name: Summarize DMA helper build gaps
-        continue-on-error: true
+        # if: always(), NOT continue-on-error -- this step carries the gate, and
+        # continue-on-error would swallow its exit 1 exactly the way it swallowed
+        # the compile failures this module spent two runs hiding. Matches the
+        # other five summarize steps.
+        if: always()
         run: |
           set +e
           echo "=== drm_dma_helpers.ko ==="
@@ -646,6 +650,16 @@ jobs:
             echo "--- missing headers, if any ---"
             grep -oE "'[a-z0-9_/.-]+\.h' file not found" /tmp/dma-helpers-build.log 2>/dev/null | sort -u | head -20
           fi
+          # Gate, same as the other required modules. drm_dma_helpers builds as
+          # of nextbsd-kernel#181 + #182, so a missing .ko is now a regression
+          # rather than a measurement.
+          case " $REQUIRED_KOS " in
+            *" drm_dma_helpers "*)
+              if [ ! -f /tmp/drm-kmod/drm_dma_helpers/drm_dma_helpers.ko ]; then
+                echo "::error::drm_dma_helpers.ko did not build -- see the errors above"
+                exit 1
+              fi ;;
+          esac
 
       - name: Build drm_shmem_helpers.ko (shmem GEM + fbdev)
         continue-on-error: true
