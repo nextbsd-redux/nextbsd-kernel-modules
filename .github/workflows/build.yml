@@ -661,6 +661,57 @@ jobs:
               fi ;;
           esac
 
+      # COMPILE PROBE, not a port (nextbsd-kernel#176). vc4_firmware_kms.c is
+      # vendored so the compiler can enumerate what it is missing, rather than
+      # us guessing at a 53-symbol DRM surface from the outside. It is expected
+      # to fail; the gap list is the deliverable, exactly as the drm_dma_helpers
+      # build was before its shims landed.
+      #
+      # Deliberately NOT in REQUIRED_KOS: nothing here is supposed to build yet.
+      - name: Build vc4_fkms.ko (COMPILE PROBE -- expected to fail)
+        continue-on-error: true
+        run: |
+          set -eu
+          mkdir -p /tmp/drm-kmod/drivers/gpu/drm/vc4 /tmp/drm-kmod/include/soc/bcm2835
+          cp nbkm-tools/graphics/drivers/gpu/drm/vc4/*  /tmp/drm-kmod/drivers/gpu/drm/vc4/
+          cp nbkm-tools/graphics/include/linux/*.h      /tmp/drm-kmod/include/linux/
+          cp nbkm-tools/graphics/include/soc/bcm2835/*.h /tmp/drm-kmod/include/soc/bcm2835/
+          cp -R nbkm-tools/graphics/vc4_fkms /tmp/drm-kmod/
+          NPROC=$(nproc)
+          cd /usr/src
+          ./tools/build/make.py \
+            --cross-bindir="${CROSS_BINDIR}" \
+            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=NEXTBSD \
+            buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod/vc4_fkms -j${NPROC} SYSDIR=/usr/src/sys" \
+            2>&1 | tee /tmp/fkms-build.log
+
+      - name: Summarize fkms probe gaps (the deliverable)
+        if: always()
+        run: |
+          set +e
+          echo "=== vc4_fkms.ko ==="
+          if [ -f /tmp/drm-kmod/vc4_fkms/vc4_fkms.ko ]; then
+            echo "BUILT -- unexpected, and good news"
+            ls -la /tmp/drm-kmod/vc4_fkms/vc4_fkms.ko
+          else
+            echo "NOT BUILT -- this is a probe; the gaps below are the point"
+          fi
+          echo "=== missing headers ==="
+          grep -oE "fatal error: '[^']+' file not found" /tmp/fkms-build.log 2>/dev/null | sort -u
+          echo "=== undeclared functions ==="
+          grep -oE "call to undeclared function '[a-zA-Z_0-9]+'" /tmp/fkms-build.log 2>/dev/null | \
+            sed "s/.*'\(.*\)'/\1/" | sort -u
+          echo "=== undeclared identifiers ==="
+          grep -oE "use of undeclared identifier '[a-zA-Z_0-9]+'" /tmp/fkms-build.log 2>/dev/null | \
+            sed "s/.*'\(.*\)'/\1/" | sort -u | head -60
+          echo "=== incomplete types ==="
+          grep -oE "incomplete type '[^']+'" /tmp/fkms-build.log 2>/dev/null | sort -u | head -30
+          echo "=== no member named ==="
+          grep -oE "no member named '[a-zA-Z_0-9]+' in '[^']+'" /tmp/fkms-build.log 2>/dev/null | sort -u | head -40
+          echo "=== error count ==="
+          ERRS=$(grep -c ": error:" /tmp/fkms-build.log 2>/dev/null) || ERRS=0
+          echo "$ERRS"
+
       - name: Build drm_shmem_helpers.ko (shmem GEM + fbdev)
         continue-on-error: true
         run: |
