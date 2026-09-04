@@ -288,4 +288,15 @@ DRIVER_MODULE(vc4_fkms_ofwbus, ofwbus, vc4_fkms_driver_bsd, 0, 0);
 MODULE_VERSION(vc4_fkms, 1);
 MODULE_DEPEND(vc4_fkms, drmn, 2, 2, 2);
 MODULE_DEPEND(vc4_fkms, drm_dma_helpers, 1, 1, 1);
+/*
+ * drm_extra_helpers carries drm_gem_fb_create(), which this module's
+ * mode_config funcs point at. drm-kmod does not ship it, so it is not reachable
+ * through drmn -- and MODULE_DEPEND is depth-1, so having it loaded is not
+ * enough: the kernel linker only searches a module's declared dependencies.
+ *
+ * Measured on hardware rather than guessed. Without this edge, kextload fails
+ * with "link_elf: symbol drm_gem_fb_create undefined" even after
+ * IOGraphicsExtras is loaded and exporting it.
+ */
+MODULE_DEPEND(vc4_fkms, drm_extra_helpers, 1, 1, 1);
 MODULE_DEPEND(vc4_fkms, linuxkpi, 1, 1, 1);

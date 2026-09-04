@@ -1086,6 +1086,7 @@ jobs:
           if [ -f "$KO/vc4_fkms.ko" ]; then
             "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.dmabuf \
                  -l org.nextbsd.kext.iographicsdma \
+                 -l org.nextbsd.kext.iographicsextras \
                  "$KO/vc4_fkms.ko" VideoCoreKMS org.nextbsd.kext.videocorekms
           fi
           if [ -f "$KO/virtio_gpu_drm.ko" ] && [ -f pers/VirtIOGraphics.iokitpersonalities ]; then
