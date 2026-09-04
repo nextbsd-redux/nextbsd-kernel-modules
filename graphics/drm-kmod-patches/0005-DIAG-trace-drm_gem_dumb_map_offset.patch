@@ -1,54 +1,67 @@
-DIAGNOSTIC (not for merge): trace drm_gem_dumb_map_offset
+DIAGNOSTIC (not for merge): trace objects_lookup, with DRM_ERROR
 
-DRM_IOCTL_MODE_MAP_DUMB panics on a device-tree DRM device
-(nextbsd-kernel#176):
+Replaces the previous attempt, which printed nothing. Two reasons it was
+wrong:
 
-	panic: vm_fault failed: 0xffff0000007d8d00 error 1
-	#5 drm_gem_dumb_map_offset+0x2c
-	#6 drm_ioctl_kernel -> drm_ioctl
+  It used printf(), which produced no console output from this translation
+  unit -- the format strings were in the built binary but never reached the
+  message buffer captured in the dump. DRM_ERROR demonstrably works here;
+  "[drm ERROR :vc4_fkms_bind] Oh dear, failed to register IRQ" comes out of
+  the same build.
 
-Two things are already established by testing rather than reading:
+  It printed AFTER drm_gem_object_lookup() returned, which is too late. The
+  backtrace lands at drm_gem_dumb_map_offset+0x2c, and disassembly puts that
+  exactly at the call into objects_lookup -- so a fault inside it produces no
+  output at all.
 
-  MAP_DUMB with a bogus handle returns ENOENT cleanly, so the
-  spin_lock(&filp->table_lock) and idr_find() in objects_lookup() are fine.
+That also explains why a bogus handle survives: idr_find() returns NULL and
+the loop breaks BEFORE drm_gem_object_get(). A real handle reaches the get.
+DESTROY_DUMB works because drm_gem_handle_delete() takes a different path and
+does not call it.
 
-  DESTROY_DUMB on a real handle works, and it does the same lookup plus a
-  reference drop -- so lookup with a real object is fine too.
-
-That leaves drm_gem_create_mmap_offset(), and guessing which pointer inside
-it is bad has not converged. This prints the object, its device, the vma
-offset manager and the return code so the next run says which one.
+So the suspect is now drm_gem_object_get() on a real object, and this prints
+the object, its device, its funcs and its refcount immediately before and
+after.
 
 Revert before merging.
 --- a/drivers/gpu/drm/drm_gem.c
 +++ b/drivers/gpu/drm/drm_gem.c
-@@ -371,20 +371,29 @@
- 	int ret;
- 
- 	obj = drm_gem_object_lookup(file, handle);
-+	printf("fkms-dbg: map_offset handle=%u obj=%p\n", handle, obj);
- 	if (!obj)
- 		return -ENOENT;
- 
-+	printf("fkms-dbg:   obj->dev=%p size=%zu import_attach=%p\n",
-+	    obj->dev, (size_t)obj->size, obj->import_attach);
-+	printf("fkms-dbg:   vma_offset_manager=%p funcs=%p\n",
-+	    obj->dev != NULL ? obj->dev->vma_offset_manager : NULL, obj->funcs);
-+
- 	/* Don't allow imported objects to be mapped */
- 	if (drm_gem_is_imported(obj)) {
- 		ret = -EINVAL;
+@@ -380,7 +380,10 @@
  		goto out;
  	}
  
-+	printf("fkms-dbg:   calling drm_gem_create_mmap_offset\n");
++	DRM_ERROR("fkms-dbg: calling create_mmap_offset, mgr=%p\n",
++	    obj->dev != NULL ? obj->dev->vma_offset_manager : NULL);
  	ret = drm_gem_create_mmap_offset(obj);
-+	printf("fkms-dbg:   create_mmap_offset ret=%d\n", ret);
++	DRM_ERROR("fkms-dbg: create_mmap_offset ret=%d\n", ret);
  	if (ret)
  		goto out;
  
- 	*offset = drm_vma_node_offset_addr(&obj->vma_node);
-+	printf("fkms-dbg:   offset=0x%llx\n", (unsigned long long)*offset);
- out:
- 	drm_gem_object_put(obj);
+@@ -719,19 +722,27 @@
+ 	int i, ret = 0;
+ 	struct drm_gem_object *obj;
  
++	DRM_ERROR("fkms-dbg: objects_lookup filp=%p count=%d\n", filp, count);
+ 	spin_lock(&filp->table_lock);
+ 
+ 	for (i = 0; i < count; i++) {
+ 		/* Check if we currently have a reference on the object */
+ 		obj = idr_find(&filp->object_idr, handle[i]);
++		DRM_ERROR("fkms-dbg:  idr_find(%u) -> %p\n", handle[i], obj);
+ 		if (!obj) {
+ 			ret = -ENOENT;
+ 			break;
+ 		}
++		DRM_ERROR("fkms-dbg:  obj dev=%p size=%zu funcs=%p refcount=%u\n",
++		    obj->dev, (size_t)obj->size, obj->funcs,
++		    kref_read(&obj->refcount));
+ 		drm_gem_object_get(obj);
++		DRM_ERROR("fkms-dbg:  get ok, refcount=%u\n",
++		    kref_read(&obj->refcount));
+ 		objs[i] = obj;
+ 	}
+ 	spin_unlock(&filp->table_lock);
++	DRM_ERROR("fkms-dbg: objects_lookup done ret=%d\n", ret);
+ 
+ 	return ret;
+ }
