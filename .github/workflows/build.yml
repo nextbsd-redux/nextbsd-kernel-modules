@@ -39,6 +39,23 @@ on:
 
 env:
   FREEBSD_BRANCH: releng/15.0
+  # Modules that MUST build. A missing .ko for one of these fails the job.
+  #
+  # The `continue-on-error: true` on each build step below is deliberate and
+  # stays: these steps exist to PRINT the missing symbols and headers, and
+  # serialising them would waste a CI cycle measuring one gap at a time. What
+  # was wrong is that the job then went green regardless, so a module that used
+  # to build could stop building and nothing said so -- twice a hard compile
+  # failure in drm_dma_helpers was reported as success and only found by
+  # reading the log.
+  #
+  # So the build steps stay non-gating and the summarize steps gate instead:
+  # each one already knows whether its .ko exists, and now fails if the module
+  # is named here. A module still being ported is simply absent from the list
+  # and keeps reporting its gaps without failing anything -- which is how
+  # drm_dma_helpers should behave until nextbsd-kernel#181 lands the linuxkpi
+  # symbols it needs. Add it here once it builds.
+  REQUIRED_KOS: "drm_extra_helpers bochs vboxvideo linux_virtio drm_shmem_helpers virtio_gpu_drm"
 
 jobs:
   modules:
@@ -379,7 +396,16 @@ jobs:
           # inflated every count in the first runs and made a clean driver
           # build read as 4 errors. Compiler diagnostics are always
           # file:line:col: error:.
-          grep -c ": error:" /tmp/extra-helpers-build.log 2>/dev/null || echo 0
+          ERRS=$(grep -c ": error:" /tmp/extra-helpers-build.log 2>/dev/null) || ERRS=0
+          echo "$ERRS"
+          # Gate. On the REQUIRED_KOS list, a missing .ko is a build
+          # failure rather than a measurement, and the gaps printed
+          # above are the diagnosis rather than the deliverable.
+          case " $REQUIRED_KOS " in
+            *" drm_extra_helpers "*)
+              echo "::error::drm_extra_helpers.ko did not build ($ERRS compiler errors) -- see the gaps above"
+              exit 1 ;;
+          esac
 
       # EXPERIMENTAL (graphics kext series, step 3): bochs, the plan's P0 driver.
       # Binds qemu's DEFAULT -vga std (1234:1111), so it device-matches in CI
@@ -424,7 +450,16 @@ jobs:
           # inflated every count in the first runs and made a clean driver
           # build read as 4 errors. Compiler diagnostics are always
           # file:line:col: error:.
-          grep -c ": error:" /tmp/bochs-build.log 2>/dev/null || echo 0
+          ERRS=$(grep -c ": error:" /tmp/bochs-build.log 2>/dev/null) || ERRS=0
+          echo "$ERRS"
+          # Gate. On the REQUIRED_KOS list, a missing .ko is a build
+          # failure rather than a measurement, and the gaps printed
+          # above are the diagnosis rather than the deliverable.
+          case " $REQUIRED_KOS " in
+            *" bochs "*)
+              echo "::error::bochs.ko did not build ($ERRS compiler errors) -- see the gaps above"
+              exit 1 ;;
+          esac
 
       # EXPERIMENTAL (graphics kext series, step 4): vboxvideo (80ee:beef).
       # The cheapest driver in the plan, and cheap because bochs went first --
@@ -482,7 +517,16 @@ jobs:
           # inflated every count in the first runs and made a clean driver
           # build read as 4 errors. Compiler diagnostics are always
           # file:line:col: error:.
-          grep -c ": error:" /tmp/vboxvideo-build.log 2>/dev/null || echo 0
+          ERRS=$(grep -c ": error:" /tmp/vboxvideo-build.log 2>/dev/null) || ERRS=0
+          echo "$ERRS"
+          # Gate. On the REQUIRED_KOS list, a missing .ko is a build
+          # failure rather than a measurement, and the gaps printed
+          # above are the diagnosis rather than the deliverable.
+          case " $REQUIRED_KOS " in
+            *" vboxvideo "*)
+              echo "::error::vboxvideo.ko did not build ($ERRS compiler errors) -- see the gaps above"
+              exit 1 ;;
+          esac
 
       # EXPERIMENTAL (graphics kext series, step 5): the LinuxKPI virtio shim.
       #
@@ -541,7 +585,16 @@ jobs:
           # inflated every count in the first runs and made a clean driver
           # build read as 4 errors. Compiler diagnostics are always
           # file:line:col: error:.
-          grep -c ": error:" /tmp/linux-virtio-build.log 2>/dev/null || echo 0
+          ERRS=$(grep -c ": error:" /tmp/linux-virtio-build.log 2>/dev/null) || ERRS=0
+          echo "$ERRS"
+          # Gate. On the REQUIRED_KOS list, a missing .ko is a build
+          # failure rather than a measurement, and the gaps printed
+          # above are the diagnosis rather than the deliverable.
+          case " $REQUIRED_KOS " in
+            *" linux_virtio "*)
+              echo "::error::linux_virtio.ko did not build ($ERRS compiler errors) -- see the gaps above"
+              exit 1 ;;
+          esac
 
       # EXPERIMENTAL (graphics kext series, step 6): the shmem GEM helpers.
       #
@@ -633,7 +686,16 @@ jobs:
           # inflated every count in the first runs and made a clean driver
           # build read as 4 errors. Compiler diagnostics are always
           # file:line:col: error:.
-          grep -c ": error:" /tmp/shmem-helpers-build.log 2>/dev/null || echo 0
+          ERRS=$(grep -c ": error:" /tmp/shmem-helpers-build.log 2>/dev/null) || ERRS=0
+          echo "$ERRS"
+          # Gate. On the REQUIRED_KOS list, a missing .ko is a build
+          # failure rather than a measurement, and the gaps printed
+          # above are the diagnosis rather than the deliverable.
+          case " $REQUIRED_KOS " in
+            *" drm_shmem_helpers "*)
+              echo "::error::drm_shmem_helpers.ko did not build ($ERRS compiler errors) -- see the gaps above"
+              exit 1 ;;
+          esac
 
       # EXPERIMENTAL (graphics kext series, step 7): the driver itself.
       #
@@ -689,7 +751,16 @@ jobs:
           # inflated every count in the first runs and made a clean driver
           # build read as 4 errors. Compiler diagnostics are always
           # file:line:col: error:.
-          grep -c ": error:" /tmp/virtio-gpu-build.log 2>/dev/null || echo 0
+          ERRS=$(grep -c ": error:" /tmp/virtio-gpu-build.log 2>/dev/null) || ERRS=0
+          echo "$ERRS"
+          # Gate. On the REQUIRED_KOS list, a missing .ko is a build
+          # failure rather than a measurement, and the gaps printed
+          # above are the diagnosis rather than the deliverable.
+          case " $REQUIRED_KOS " in
+            *" virtio_gpu_drm "*)
+              echo "::error::virtio_gpu_drm.ko did not build ($ERRS compiler errors) -- see the gaps above"
+              exit 1 ;;
+          esac
 
       - name: Generate graphics IOKitPersonalities from drm-kmod source
         run: |
