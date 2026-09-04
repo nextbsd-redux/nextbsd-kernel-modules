@@ -42,6 +42,7 @@
 #include <linux/device.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/dma-mapping.h>
 #include <linux/platform_device.h>
 
 #include <drm/drm_atomic_helper.h>
@@ -200,11 +201,31 @@ vc4_fkms_attach(device_t dev)
 	 * this struct device, and to_vc4_dev() finds vc4_dev back from it.
 	 */
 	device_printf(dev, "attach: irq %u\n", sc->pdev.dev.irq);
-	FKMS_TRACE(dev, "3 devm_drm_dev_alloc");
+	FKMS_TRACE(dev, "3 dma_priv + devm_drm_dev_alloc");
 	sc->master.bsddev = dev;
 	INIT_LIST_HEAD(&sc->master.devres_head);
 	spin_lock_init(&sc->master.devres_lock);
 	dev_set_name(&sc->master, "vc4_fkms");
+
+	/*
+	 * The DMA GEM helpers allocate against drm->dev, which drm_dev_init()
+	 * sets to this device. Without dma_priv every allocator in
+	 * linux_pci.c returns NULL on its dma_priv == NULL check, so
+	 * DRM_IOCTL_MODE_CREATE_DUMB fails with ENOMEM for a 1.2MB buffer on a
+	 * machine with 16GB free -- measured, and the reason X could not get
+	 * past ScreenInit.
+	 *
+	 * Both masks are 32-bit, matching what vc4_drm_bind() sets on Linux
+	 * (dev->coherent_dma_mask = DMA_BIT_MASK(32)). The display side of this
+	 * SoC does not address above 4GB, and the mailbox interface carries
+	 * buffer addresses in a single 32-bit word.
+	 */
+	error = linux_dma_priv_init(&sc->master, DMA_BIT_MASK(32),
+	    DMA_BIT_MASK(32));
+	if (error != 0) {
+		device_printf(dev, "dma_priv init failed: %d\n", error);
+		goto fail;
+	}
 	vc4 = devm_drm_dev_alloc(&sc->master, &vc4_fkms_drm_driver,
 	    struct vc4_dev, base);
 	if (IS_ERR(vc4)) {
@@ -297,6 +318,7 @@ vc4_fkms_detach(device_t dev)
 			component_unbind_all(&sc->master, &sc->vc4->base);
 	}
 	vc4_firmware_kms_driver.remove(&sc->pdev);
+	linux_dma_priv_uninit(&sc->master);
 	if (sc->irq_res != NULL)
 		bus_release_resource(dev, SYS_RES_IRQ, sc->irq_rid,
 		    sc->irq_res);
