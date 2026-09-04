@@ -172,6 +172,14 @@ vc4_fkms_attach(device_t dev)
 	INIT_LIST_HEAD(&sc->pdev.dev.devres_head);
 	spin_lock_init(&sc->pdev.dev.devres_lock);
 	/*
+	 * request_irq() ends with list_add(&irqe->links, &dev->irqents), and a
+	 * zeroed list head has a NULL next -- so this is a panic the moment an
+	 * interrupt is registered, which is only reachable once
+	 * nextbsd-kernel#189 lets request_irq() get that far at all.
+	 * linux_pci.c:460 does the same for a PCI device.
+	 */
+	INIT_LIST_HEAD(&sc->pdev.dev.irqents);
+	/*
 	 * dev_name() is kobject_name(), which returns kobj.name verbatim -- NULL
 	 * on a struct device nobody named. Anything that formats or copies it
 	 * then faults, and DRM device init does use the parent's name. Cheap to
@@ -215,6 +223,7 @@ vc4_fkms_attach(device_t dev)
 	sc->master.bsddev = dev;
 	INIT_LIST_HEAD(&sc->master.devres_head);
 	spin_lock_init(&sc->master.devres_lock);
+	INIT_LIST_HEAD(&sc->master.irqents);
 	dev_set_name(&sc->master, "vc4_fkms");
 
 	/*
