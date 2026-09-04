@@ -570,7 +570,9 @@ EXPORT_SYMBOL_GPL(drm_gem_dma_vmap);
 int drm_gem_dma_mmap(struct drm_gem_dma_object *dma_obj, struct vm_area_struct *vma)
 {
 	struct drm_gem_object *obj = &dma_obj->base;
+#ifndef __FreeBSD__
 	int ret;
+#endif
 
 	/*
 	 * Clear the VM_PFNMAP flag that was set by drm_gem_mmap(), and set the
