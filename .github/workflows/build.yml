@@ -672,10 +672,14 @@ jobs:
         continue-on-error: true
         run: |
           set -eu
-          mkdir -p /tmp/drm-kmod/drivers/gpu/drm/vc4 /tmp/drm-kmod/include/soc/bcm2835
+          mkdir -p /tmp/drm-kmod/drivers/gpu/drm/vc4 /tmp/drm-kmod/include/soc/bcm2835 \
+                   /tmp/drm-kmod/include/uapi/drm
           cp nbkm-tools/graphics/drivers/gpu/drm/vc4/*  /tmp/drm-kmod/drivers/gpu/drm/vc4/
           cp nbkm-tools/graphics/include/linux/*.h      /tmp/drm-kmod/include/linux/
           cp nbkm-tools/graphics/include/soc/bcm2835/*.h /tmp/drm-kmod/include/soc/bcm2835/
+          # vc4_drv.h does #include "uapi/drm/vc4_drm.h"; drm-kmod ships uapi
+          # headers for the drivers it carries and vc4 is not one of them.
+          cp nbkm-tools/graphics/include/uapi/drm/*.h   /tmp/drm-kmod/include/uapi/drm/
           cp -R nbkm-tools/graphics/vc4_fkms /tmp/drm-kmod/
           NPROC=$(nproc)
           cd /usr/src
