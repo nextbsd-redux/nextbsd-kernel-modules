@@ -34,7 +34,8 @@ EXPORT_SYMS=	YES
 
 SRCS=	\
 	vc4_firmware_kms.c \
-	vc4_fkms_freebsd.c
+	vc4_fkms_freebsd.c \
+	vc4_fkms_master.c
 
 SRCS	+=			\
 	opt_acpi.h		\
