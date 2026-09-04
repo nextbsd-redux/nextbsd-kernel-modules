@@ -91,6 +91,18 @@ static const struct drm_mode_config_funcs vc4_fkms_mode_funcs = {
 	.atomic_commit	= drm_atomic_helper_commit,
 };
 
+/*
+ * Attach tracing (nextbsd-kernel#176). The first hardware load reset the
+ * machine with no dmesg output at all, which means it died before anything in
+ * attach printed. Each step announces itself BEFORE doing the thing, so the
+ * last line on the console names the call that killed it rather than the last
+ * one that succeeded.
+ *
+ * device_printf goes to the console synchronously, which is what makes it
+ * survive a panic where a deferred log would not.
+ */
+#define	FKMS_TRACE(dev, msg)	device_printf((dev), "attach: " msg "\n")
+
 struct vc4_fkms_softc {
 	device_t		bsddev;
 	struct resource		*irq_res;
@@ -131,13 +143,16 @@ vc4_fkms_attach(device_t dev)
 
 	sc = device_get_softc(dev);
 	sc->bsddev = dev;
+	FKMS_TRACE(dev, "start");
 
 	/*
 	 * The FDT node, in the shape a Linux platform driver expects to find
 	 * on dev->of_node. fkms reads it to follow its "brcm,firmware"
 	 * phandle to the mailbox.
 	 */
+	FKMS_TRACE(dev, "1 ofw_bus_get_node");
 	sc->node.node = (intptr_t)ofw_bus_get_node(dev);
+	device_printf(dev, "attach: node phandle %#lx\n", (long)sc->node.node);
 
 	/*
 	 * Both struct devices are built by hand, and deliberately WITHOUT
@@ -155,6 +170,14 @@ vc4_fkms_attach(device_t dev)
 	sc->pdev.dev.parent = NULL;
 	INIT_LIST_HEAD(&sc->pdev.dev.devres_head);
 	spin_lock_init(&sc->pdev.dev.devres_lock);
+	/*
+	 * dev_name() is kobject_name(), which returns kobj.name verbatim -- NULL
+	 * on a struct device nobody named. Anything that formats or copies it
+	 * then faults, and DRM device init does use the parent's name. Cheap to
+	 * set, and it removes a whole class of failure that would look like a
+	 * crash in DRM rather than a missing field here.
+	 */
+	dev_set_name(&sc->pdev.dev, "vc4_firmware_kms");
 	dev_set_drvdata(&sc->pdev.dev, NULL);
 
 	/*
@@ -163,6 +186,7 @@ vc4_fkms_attach(device_t dev)
 	 * one, used for the firmware's vblank notification; without it the
 	 * driver still binds and simply never reports vblank.
 	 */
+	FKMS_TRACE(dev, "2 alloc irq");
 	sc->irq_rid = 0;
 	sc->irq_res = bus_alloc_resource_any(dev, SYS_RES_IRQ, &sc->irq_rid,
 	    RF_ACTIVE | RF_SHAREABLE);
@@ -175,9 +199,12 @@ vc4_fkms_attach(device_t dev)
 	 * The master. devm_drm_dev_alloc() ties the drm_device's lifetime to
 	 * this struct device, and to_vc4_dev() finds vc4_dev back from it.
 	 */
+	device_printf(dev, "attach: irq %u\n", sc->pdev.dev.irq);
+	FKMS_TRACE(dev, "3 devm_drm_dev_alloc");
 	sc->master.bsddev = dev;
 	INIT_LIST_HEAD(&sc->master.devres_head);
 	spin_lock_init(&sc->master.devres_lock);
+	dev_set_name(&sc->master, "vc4_fkms");
 	vc4 = devm_drm_dev_alloc(&sc->master, &vc4_fkms_drm_driver,
 	    struct vc4_dev, base);
 	if (IS_ERR(vc4)) {
@@ -196,6 +223,7 @@ vc4_fkms_attach(device_t dev)
 	vc4->dev = &sc->pdev.dev;
 	dev_set_drvdata(&sc->master, drm);
 
+	FKMS_TRACE(dev, "4 drmm_mode_config_init");
 	error = drmm_mode_config_init(drm);
 	if (error != 0) {
 		device_printf(dev, "mode config init failed: %d\n", error);
@@ -208,12 +236,14 @@ vc4_fkms_attach(device_t dev)
 	drm->mode_config.max_height = 7680;
 
 	/* Registers the component; fkms's own probe does nothing else. */
+	FKMS_TRACE(dev, "5 fkms probe (component_add)");
 	error = vc4_firmware_kms_driver.probe(&sc->pdev);
 	if (error != 0) {
 		device_printf(dev, "fkms probe failed: %d\n", error);
 		goto fail;
 	}
 
+	FKMS_TRACE(dev, "6 component_bind_all -> fkms bind -> FIRMWARE MAILBOX");
 	error = component_bind_all(&sc->master, drm);
 	if (error != 0) {
 		device_printf(dev, "fkms bind failed: %d\n", error);
@@ -221,6 +251,7 @@ vc4_fkms_attach(device_t dev)
 	}
 	sc->bound = true;
 
+	FKMS_TRACE(dev, "7 drm_vblank_init");
 	drm->vblank_disable_immediate = true;
 	error = drm_vblank_init(drm, drm->mode_config.num_crtc);
 	if (error != 0) {
@@ -228,8 +259,10 @@ vc4_fkms_attach(device_t dev)
 		goto fail;
 	}
 
+	FKMS_TRACE(dev, "8 drm_mode_config_reset");
 	drm_mode_config_reset(drm);
 
+	FKMS_TRACE(dev, "9 drm_dev_register");
 	error = drm_dev_register(drm, 0);
 	if (error != 0) {
 		device_printf(dev, "drm_dev_register failed: %d\n", error);
