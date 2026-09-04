@@ -661,13 +661,18 @@ jobs:
               fi ;;
           esac
 
-      # COMPILE PROBE, not a port (nextbsd-kernel#176). vc4_firmware_kms.c is
-      # vendored so the compiler can enumerate what it is missing, rather than
-      # us guessing at a 53-symbol DRM surface from the outside. It is expected
-      # to fail; the gap list is the deliverable, exactly as the drm_dma_helpers
-      # build was before its shims landed.
+      # vc4_firmware_kms, vendored from raspberrypi/linux rpi-6.12.y and built
+      # against the linuxkpi platform/OF/component work in nextbsd-kernel#183
+      # and #184 (nextbsd-kernel#176).
       #
-      # Deliberately NOT in REQUIRED_KOS: nothing here is supposed to build yet.
+      # It began as a compile probe, to make the compiler enumerate the gaps
+      # rather than guessing at a 53-symbol DRM surface from outside. The DRM
+      # surface turned out to be complete; every gap was device-model. It now
+      # builds, so it is in REQUIRED_KOS and the summarize step gates.
+      #
+      # The gap-category output below stays: it is what turned each failing
+      # round into a specific list rather than a wall of errors, and it costs
+      # nothing on a green build.
       - name: Build vc4_fkms.ko (VideoCore firmware KMS)
         # arm64 only. The glue calls bcm2835_firmware_property() and
         # bcm2835_mbox_property(), which exist only in an arm64 kernel -- the
