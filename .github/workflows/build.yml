@@ -704,6 +704,17 @@ jobs:
           # thing to a load test we get before hardware.
           cp /tmp/drm-kmod/vc4_fkms/vc4_fkms.ko /tmp/ko-out/ 2>/dev/null || true
 
+      # A dedicated upload, because "Upload drm-kmod modules artifact" runs
+      # several steps earlier -- before this module is built -- so copying into
+      # ko-out does NOT put it in that artifact. Checked by downloading it.
+      - name: Upload vc4_fkms.ko
+        if: matrix.target == 'arm64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vc4-fkms-arm64
+          path: /tmp/drm-kmod/vc4_fkms/vc4_fkms.ko
+          if-no-files-found: warn
+
       - name: Summarize fkms build
         if: always() && matrix.target == 'arm64'
         run: |
