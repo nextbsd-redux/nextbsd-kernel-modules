@@ -56,8 +56,14 @@ SRCS	+=			\
 	device_if.h		\
 	pci_if.h		\
 	ofw_bus_if.h		\
-	vnode_if.h
+	vnode_if.h		\
+	clknode_if.h
 
+# clknode_if.h is GENERATED from dev/clk/clknode_if.m. linux/clk.h includes
+# dev/clk/clk.h, which includes it, so without this every file that touches
+# a clock dies at the #include -- and, worse, reports FEWER errors, because
+# the translation unit aborts before its body is parsed. Same arrangement as
+# sys/modules/neta and sys/modules/vf_i2c.
 CLEANFILES+= ${KMOD}.ko.full ${KMOD}.ko.debug
 
 .include <bsd.kmod.mk>
