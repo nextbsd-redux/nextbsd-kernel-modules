@@ -55,7 +55,7 @@ env:
   # and keeps reporting its gaps without failing anything -- which is how
   # drm_dma_helpers should behave until nextbsd-kernel#181 lands the linuxkpi
   # symbols it needs. Add it here once it builds.
-  REQUIRED_KOS: "drm_extra_helpers bochs vboxvideo linux_virtio drm_shmem_helpers virtio_gpu_drm drm_dma_helpers"
+  REQUIRED_KOS: "drm_extra_helpers bochs vboxvideo linux_virtio drm_shmem_helpers virtio_gpu_drm drm_dma_helpers vc4_fkms"
 
 jobs:
   modules:
@@ -661,6 +661,96 @@ jobs:
               fi ;;
           esac
 
+      # vc4_firmware_kms, vendored from raspberrypi/linux rpi-6.12.y and built
+      # against the linuxkpi platform/OF/component work in nextbsd-kernel#183
+      # and #184 (nextbsd-kernel#176).
+      #
+      # It began as a compile probe, to make the compiler enumerate the gaps
+      # rather than guessing at a 53-symbol DRM surface from outside. The DRM
+      # surface turned out to be complete; every gap was device-model. It now
+      # builds, so it is in REQUIRED_KOS and the summarize step gates.
+      #
+      # The gap-category output below stays: it is what turned each failing
+      # round into a specific list rather than a wall of errors, and it costs
+      # nothing on a green build.
+      - name: Build vc4_fkms.ko (VideoCore firmware KMS)
+        # arm64 only. The glue calls bcm2835_firmware_property() and
+        # bcm2835_mbox_property(), which exist only in an arm64 kernel -- the
+        # headers are in the tree on every arch, so this compiles on amd64 and
+        # then fails to link. Same arrangement as bochs and vboxvideo, which
+        # are amd64 only.
+        if: matrix.target == 'arm64'
+        continue-on-error: true
+        run: |
+          set -eu
+          mkdir -p /tmp/drm-kmod/drivers/gpu/drm/vc4 /tmp/drm-kmod/include/soc/bcm2835 \
+                   /tmp/drm-kmod/include/uapi/drm
+          cp nbkm-tools/graphics/drivers/gpu/drm/vc4/*  /tmp/drm-kmod/drivers/gpu/drm/vc4/
+          cp nbkm-tools/graphics/include/linux/*.h      /tmp/drm-kmod/include/linux/
+          cp nbkm-tools/graphics/include/soc/bcm2835/*.h /tmp/drm-kmod/include/soc/bcm2835/
+          # vc4_drv.h does #include "uapi/drm/vc4_drm.h"; drm-kmod ships uapi
+          # headers for the drivers it carries and vc4 is not one of them.
+          cp nbkm-tools/graphics/include/uapi/drm/*.h   /tmp/drm-kmod/include/uapi/drm/
+          cp -R nbkm-tools/graphics/vc4_fkms /tmp/drm-kmod/
+          NPROC=$(nproc)
+          cd /usr/src
+          ./tools/build/make.py \
+            --cross-bindir="${CROSS_BINDIR}" \
+            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=NEXTBSD \
+            buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod/vc4_fkms -j${NPROC} SYSDIR=/usr/src/sys" \
+            2>&1 | tee /tmp/fkms-build.log
+          # Stage it with the others so it is uploaded and, more usefully, so
+          # the symbol-resolution check runs over it -- that is the closest
+          # thing to a load test we get before hardware.
+          cp /tmp/drm-kmod/vc4_fkms/vc4_fkms.ko /tmp/ko-out/ 2>/dev/null || true
+
+      # A dedicated upload, because "Upload drm-kmod modules artifact" runs
+      # several steps earlier -- before this module is built -- so copying into
+      # ko-out does NOT put it in that artifact. Checked by downloading it.
+      - name: Upload vc4_fkms.ko
+        if: matrix.target == 'arm64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vc4-fkms-arm64
+          path: /tmp/drm-kmod/vc4_fkms/vc4_fkms.ko
+          if-no-files-found: warn
+
+      - name: Summarize fkms build
+        if: always() && matrix.target == 'arm64'
+        run: |
+          set +e
+          echo "=== vc4_fkms.ko ==="
+          if [ -f /tmp/drm-kmod/vc4_fkms/vc4_fkms.ko ]; then
+            echo "BUILT -- unexpected, and good news"
+            ls -la /tmp/drm-kmod/vc4_fkms/vc4_fkms.ko
+          else
+            echo "NOT BUILT -- this is a probe; the gaps below are the point"
+          fi
+          echo "=== missing headers ==="
+          grep -oE "fatal error: '[^']+' file not found" /tmp/fkms-build.log 2>/dev/null | sort -u
+          echo "=== undeclared functions ==="
+          grep -oE "call to undeclared function '[a-zA-Z_0-9]+'" /tmp/fkms-build.log 2>/dev/null | \
+            sed "s/.*'\(.*\)'/\1/" | sort -u
+          echo "=== undeclared identifiers ==="
+          grep -oE "use of undeclared identifier '[a-zA-Z_0-9]+'" /tmp/fkms-build.log 2>/dev/null | \
+            sed "s/.*'\(.*\)'/\1/" | sort -u | head -60
+          echo "=== incomplete types ==="
+          grep -oE "incomplete type '[^']+'" /tmp/fkms-build.log 2>/dev/null | sort -u | head -30
+          echo "=== no member named ==="
+          grep -oE "no member named '[a-zA-Z_0-9]+' in '[^']+'" /tmp/fkms-build.log 2>/dev/null | sort -u | head -40
+          echo "=== error count ==="
+          ERRS=$(grep -c ": error:" /tmp/fkms-build.log 2>/dev/null) || ERRS=0
+          echo "$ERRS"
+          # It builds as of nextbsd-kernel#183 + #184, so a missing .ko is now
+          # a regression rather than a measurement.
+          case " $REQUIRED_KOS " in
+            *" vc4_fkms "*)
+              if [ ! -f /tmp/drm-kmod/vc4_fkms/vc4_fkms.ko ]; then
+                echo "::error::vc4_fkms.ko did not build -- see the gaps above"
+                exit 1
+              fi ;;
+          esac
+
       - name: Build drm_shmem_helpers.ko (shmem GEM + fbdev)
         continue-on-error: true
         run: |
@@ -979,6 +1069,25 @@ jobs:
           if [ -f "$KO/drm_dma_helpers.ko" ]; then
             "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.dmabuf \
                  "$KO/drm_dma_helpers.ko" IOGraphicsDMA org.nextbsd.kext.iographicsdma
+          fi
+          # VideoCoreKMS -- the Raspberry Pi 5 firmware KMS driver
+          # (nextbsd-kernel#176). arm64 only, since the module calls
+          # bcm2835_firmware_property()/bcm2835_mbox_property().
+          #
+          # NO IOKitPersonalities, deliberately. The in-kernel catalogue matches
+          # PCI only -- iocatalogue.h defines exactly one provider class,
+          # IOCAT_PROVIDER_IOPCIDEVICE, and matching is by a 0x<device><vendor>
+          # word -- and firmwarekms is a device tree node, not a PCI function.
+          # So there is nothing for kextd to auto-match on, and binding instead
+          # happens through newbus once the module is loaded: the driver
+          # registers DRIVER_MODULE(..., ofwbus, ...) and attaches to the node
+          # directly. That makes this an explicitly kextload'ed bundle, like the
+          # library kexts above rather than like VirtIOGraphics below.
+          if [ -f "$KO/vc4_fkms.ko" ]; then
+            "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.dmabuf \
+                 -l org.nextbsd.kext.iographicsdma \
+                 -l org.nextbsd.kext.iographicsextras \
+                 "$KO/vc4_fkms.ko" VideoCoreKMS org.nextbsd.kext.videocorekms
           fi
           if [ -f "$KO/virtio_gpu_drm.ko" ] && [ -f pers/VirtIOGraphics.iokitpersonalities ]; then
             "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.dmabuf \

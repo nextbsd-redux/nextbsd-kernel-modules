@@ -1,0 +1,77 @@
+drm_sysctl: do not assume every DRM device is a PCI function
+
+drm_add_busid_modesetting() opens with
+
+    struct pci_dev *pdev = to_pci_dev(dev->dev);
+    domain = pci_domain_nr(pdev->bus);
+
+and to_pci_dev() is a container_of. On a DRM device whose parent is not a PCI
+function that yields a pointer into whatever precedes the caller's struct
+device, and the next line dereferences it. It is unconditional and it sits on
+the drm_dev_register() path, so it is an immediate panic for any non-PCI DRM
+driver.
+
+Measured on a Raspberry Pi 5 (BCM2712) bringing up vc4_firmware_kms, whose
+parent is a device-tree node (nextbsd-kernel#176):
+
+    panic: vm_fault failed: 0xffff000125cc8600 error 1
+    #5  sysctl_add_oid+0x238
+    #6  drm_sysctl_init+0x22c
+    #7  drm_debugfs_register+0x6c
+    #8  drm_minor_register+0xa8
+    #9  drm_dev_register+0xf8
+    #10 vc4_fkms_attach+0x338
+
+Guard it the way drm_file.c already guards the same cast, using the
+dev_is_pci() that tests the newbus devclass rather than a stub. A device-tree
+or platform device has no domain:bus:slot.func to report, so name it by its
+unique string, which drm_dev_init() has already set from dev_name(parent).
+
+hw.dri.0.busid then reads "platform:vc4_fkms" instead of a PCI triple, which
+is what Mesa and libdrm expect from a non-PCI device.
+
+--- a/drivers/gpu/drm/drm_sysctl_freebsd.c
++++ b/drivers/gpu/drm/drm_sysctl_freebsd.c
+@@ -171,15 +171,35 @@
+ {
+ 	struct sysctl_oid *oid;
+ 	int domain, bus, slot, func;
+-	struct pci_dev *pdev = to_pci_dev(dev->dev);
++	struct pci_dev *pdev;
+ 
+-	domain = pci_domain_nr(pdev->bus);
+-	bus    = pdev->bus->number;
+-	slot   = PCI_SLOT(pdev->devfn);
+-	func   = PCI_FUNC(pdev->devfn);
++	/*
++	 * to_pci_dev() is a container_of, so calling it on a device that is not
++	 * a PCI function yields a pointer into whatever precedes the caller's
++	 * struct device, and the very next line dereferences it. That is an
++	 * unconditional panic for any non-PCI DRM driver, on the
++	 * drm_dev_register() path.
++	 *
++	 * Guard it the way drm_file.c already does. A device-tree or platform
++	 * device has no domain:bus:slot.func to report, so name it by its
++	 * unique string instead -- which drm_dev_init() has already set from
++	 * dev_name(parent).
++	 */
++	if (dev->dev != NULL && dev_is_pci(dev->dev)) {
++		pdev = to_pci_dev(dev->dev);
+ 
+-	snprintf(dev->busid_str, sizeof(dev->busid_str),
+-	    "pci:%04x:%02x:%02x.%d", domain, bus, slot, func);
++		domain = pci_domain_nr(pdev->bus);
++		bus    = pdev->bus->number;
++		slot   = PCI_SLOT(pdev->devfn);
++		func   = PCI_FUNC(pdev->devfn);
++
++		snprintf(dev->busid_str, sizeof(dev->busid_str),
++		    "pci:%04x:%02x:%02x.%d", domain, bus, slot, func);
++	} else {
++		snprintf(dev->busid_str, sizeof(dev->busid_str),
++		    "platform:%s",
++		    dev->unique != NULL ? dev->unique : "unknown");
++	}
+ 	oid = SYSCTL_ADD_STRING(ctx, SYSCTL_CHILDREN(top), OID_AUTO, "busid",
+ 	    CTLFLAG_RD, dev->busid_str, 0, NULL);
+ 	if (oid == NULL)

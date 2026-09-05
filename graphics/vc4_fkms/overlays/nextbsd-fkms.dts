@@ -1,0 +1,37 @@
+/*
+ * Enable the firmware-KMS node on BCM2712 (nextbsd-kernel#176).
+ *
+ * bcm2712-ds.dtsi ships it disabled:
+ *
+ *	firmwarekms: firmwarekms {
+ *		compatible = "raspberrypi,rpi-firmware-kms-2712";
+ *		interrupt-parent = <&cpu_l2_irq>;
+ *		interrupts = <19>;
+ *		brcm,firmware = <&firmware>;
+ *		status = "disabled";
+ *	};
+ *
+ * which is why a Pi 5 boots with "ofwbus0: <firmwarekms> ... (no driver
+ * attached)" -- the node is present and the driver would match it, but a
+ * disabled node is never probed.
+ *
+ * This flips that one property and nothing else. Raspberry Pi's own
+ * vc4-fkms-v3d overlay would also do it, but it brings V3D and display
+ * pipeline changes written against Linux driver bindings, and the NextBSD
+ * config.txt deliberately carries no vendor overlays for that reason. A
+ * status change is the smallest thing that can be tested and the easiest to
+ * back out: remove the dtoverlay= line.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2712";
+
+	fragment@0 {
+		target = <&firmwarekms>;
+		__overlay__ {
+			status = "okay";
+		};
+	};
+};

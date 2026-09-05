@@ -314,6 +314,33 @@ int drm_gem_dma_dumb_create(struct drm_file *file_priv,
 }
 EXPORT_SYMBOL_GPL(drm_gem_dma_dumb_create);
 
+/*
+ * nextbsd-kernel#176: deliberately NO .fault handler on FreeBSD.
+ *
+ * linuxkpi's linux_file_mmap_single() chooses the pager by whether one is
+ * present:
+ *
+ *	vm_no_fault = (vmap->vm_ops->fault == NULL);
+ *	if (vm_no_fault)
+ *		cdev_pager_allocate(..., OBJT_DEVICE, &linux_cdev_pager_ops[1], ...)
+ *	else
+ *		cdev_pager_allocate(..., OBJT_MGTDEVICE, &linux_cdev_pager_ops[0], ...)
+ *
+ * OBJT_MGTDEVICE routes faults through lkpi_vmf_insert_pfn_prot_locked(),
+ * which RENAMES a page into the VM object and refuses one that is already
+ * mapped -- and kmem_alloc_contig() memory always is, because it carries a
+ * kernel mapping. That is the deadlock this driver hit
+ * (nextbsd-kernel#188).
+ *
+ * OBJT_DEVICE instead builds fake pages straight from a physical address:
+ *
+ *	vm_paddr_t paddr = IDX_TO_OFF(vmap->vm_pfn) + offset;
+ *	page = vm_page_getfake(paddr, vm_obj->memattr);
+ *
+ * which is exactly right for a physically contiguous buffer, and is the
+ * ordinary FreeBSD way to map kernel memory to userspace. Adding a .fault
+ * handler here would silently switch back to the broken path.
+ */
 const struct vm_operations_struct drm_gem_dma_vm_ops = {
 	.open = drm_gem_vm_open,
 	.close = drm_gem_vm_close,
@@ -522,7 +549,9 @@ EXPORT_SYMBOL_GPL(drm_gem_dma_vmap);
 int drm_gem_dma_mmap(struct drm_gem_dma_object *dma_obj, struct vm_area_struct *vma)
 {
 	struct drm_gem_object *obj = &dma_obj->base;
+#ifndef __FreeBSD__
 	int ret;
+#endif
 
 	/*
 	 * Clear the VM_PFNMAP flag that was set by drm_gem_mmap(), and set the
@@ -530,6 +559,36 @@ int drm_gem_dma_mmap(struct drm_gem_dma_object *dma_obj, struct vm_area_struct *
 	 * the whole buffer.
 	 */
 	vma->vm_pgoff -= drm_vma_node_start(&obj->vma_node);
+
+#ifdef __FreeBSD__
+	/*
+	 * Describe the mapping and stop. There is nothing to map here: the
+	 * OBJT_DEVICE pager linuxkpi selects for a vm_ops with no .fault
+	 * builds fake pages from vm_pfn as the mapping is touched --
+	 *
+	 *	vm_paddr_t paddr = IDX_TO_OFF(vmap->vm_pfn) + offset;
+	 *	page = vm_page_getfake(paddr, vm_obj->memattr);
+	 *
+	 * so all it needs is the base pfn and the length. The buffer is
+	 * physically contiguous by construction (dma_alloc_wc() uses
+	 * kmem_alloc_contig()), which is what makes a single base pfn enough.
+	 *
+	 * vm_page_prot is read by linux_file_mmap_single() through
+	 * pgprot2cachemode() to set the VM object's memattr, so the
+	 * write-combining choice reaches the userspace mapping from here.
+	 */
+	if (dma_obj->vaddr == NULL)
+		return -EINVAL;
+
+	vm_flags_set(vma, VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP);
+	if (!dma_obj->map_noncoherent)
+		vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
+
+	vma->vm_pfn = vtophys(dma_obj->vaddr) >> PAGE_SHIFT;
+	vma->vm_len = vma->vm_end - vma->vm_start;
+
+	return 0;
+#else
 	vm_flags_mod(vma, VM_DONTEXPAND, VM_PFNMAP);
 
 	if (dma_obj->map_noncoherent) {
@@ -547,6 +606,7 @@ int drm_gem_dma_mmap(struct drm_gem_dma_object *dma_obj, struct vm_area_struct *
 		drm_gem_vm_close(vma);
 
 	return ret;
+#endif
 }
 EXPORT_SYMBOL_GPL(drm_gem_dma_mmap);
 
