@@ -716,11 +716,17 @@ jobs:
         run: |
           set +e
           mkdir -p /tmp/drm-kmod/drivers/gpu/drm/vc4 /tmp/drm-kmod/include/soc/bcm2835 \
-                   /tmp/drm-kmod/include/uapi/drm
+                   /tmp/drm-kmod/include/uapi/drm /tmp/drm-kmod/include/kunit \
+                   /tmp/drm-kmod/include/linux/gpio /tmp/drm-kmod/include/sound
           cp nbkm-tools/graphics/drivers/gpu/drm/vc4/*   /tmp/drm-kmod/drivers/gpu/drm/vc4/
           cp nbkm-tools/graphics/include/linux/*.h       /tmp/drm-kmod/include/linux/
           cp nbkm-tools/graphics/include/soc/bcm2835/*.h /tmp/drm-kmod/include/soc/bcm2835/
           cp nbkm-tools/graphics/include/uapi/drm/*.h    /tmp/drm-kmod/include/uapi/drm/
+          # New subdirectories for #51: the glob above is linux/*.h only, so
+          # these would silently not arrive and the files would keep aborting.
+          cp nbkm-tools/graphics/include/kunit/*.h       /tmp/drm-kmod/include/kunit/
+          cp nbkm-tools/graphics/include/linux/gpio/*.h  /tmp/drm-kmod/include/linux/gpio/
+          cp nbkm-tools/graphics/include/sound/*.h       /tmp/drm-kmod/include/sound/
           cp -R nbkm-tools/graphics/vc4_kms /tmp/drm-kmod/
           NPROC=$(nproc)
           cd /usr/src
