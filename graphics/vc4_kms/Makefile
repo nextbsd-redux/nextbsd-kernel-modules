@@ -83,5 +83,10 @@ CFLAGS+= -DCONFIG_MMU=1
 
 # Same narrowing pattern as the fkms probe: of_device_id::data is a
 # const void * and drivers cast it to a per-variant enum.
+# A probe measures the WHOLE gap, so do not let clang stop at its default
+# 20-error cap -- the first run capped three files at 19 and made the
+# surface look smaller than it is.
+CFLAGS+= -ferror-limit=0
+
 CWARNFLAGS += -Wno-pointer-arith -Wno-format -Wno-cast-qual
 CWARNFLAGS += -Wno-void-pointer-to-enum-cast
