@@ -1549,6 +1549,23 @@ jobs:
               tar -C "artifacts/nextbsd-modules-$arch" -czf "out/nextbsd-modules-$arch.tar.gz" .
             fi
           done
+          # rpi5-overlays.tar.gz: device-tree overlays that must land on the
+          # Pi's FAT32 firmware partition, which no package can write -- pkg(8)
+          # installs into the UFS root and that partition is not mounted at
+          # install time. So the image build stages them, and gets them from
+          # here (nextbsd/nextbsd#429).
+          #
+          # Shipped from this repo rather than the image repo so an overlay
+          # stays versioned with the driver it enables: the two have to agree
+          # about the node's compatible string, and splitting them invites
+          # drift.
+          if [ -d graphics/vc4_fkms/overlays ]; then
+            tar -C graphics/vc4_fkms/overlays -czf out/rpi5-overlays.tar.gz .
+            echo "==> rpi5-overlays.tar.gz:"
+            tar tzf out/rpi5-overlays.tar.gz
+          else
+            echo "WARNING: no overlays dir; rpi5 image will ship without them" >&2
+          fi
           ls -lh out/
 
       # Build the SHIPPED IntelWiFi.kext (amd64) with the FULL Intel iwlwifi
