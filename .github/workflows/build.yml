@@ -727,7 +727,7 @@ jobs:
           ./tools/build/make.py \
             --cross-bindir="${CROSS_BINDIR}" \
             TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=NEXTBSD \
-            buildenv BUILDENV_SHELL="make -C /tmp/drm-kmod/vc4_kms -j${NPROC} SYSDIR=/usr/src/sys" \
+            buildenv BUILDENV_SHELL="make -k -C /tmp/drm-kmod/vc4_kms -j${NPROC} SYSDIR=/usr/src/sys" \
             > /tmp/vc4kms-probe.log 2>&1
           echo "build exit: $?"
           exit 0
@@ -754,6 +754,9 @@ jobs:
           echo
           echo "============== NO MEMBER NAMED (unique) =============="
           grep -o "no member named '[^']*' in '[^']*'" $L | sort -u | head -40
+          echo
+          echo "===== COVERAGE: .o targets attempted (must be all 10) ====="
+          grep -o "^--- [a-z0-9_]*\.o ---" $L | sort -u
           echo
           echo "============== FIRST 60 RAW ERRORS =============="
           grep 'error:' $L | head -60
