@@ -100,9 +100,16 @@ static const struct drm_mode_config_funcs vc4_fkms_mode_funcs = {
  * one that succeeded.
  *
  * device_printf goes to the console synchronously, which is what makes it
- * survive a panic where a deferred log would not.
+ * survive a panic where a deferred log would not -- a deferred log loses
+ * exactly the line that matters. That property is why this stays in the tree
+ * rather than being deleted once bring-up finished: the next person to port a
+ * firmware-KMS revision gets the same bisect for free with boot -v.
  */
-#define	FKMS_TRACE(dev, msg)	device_printf((dev), "attach: " msg "\n")
+#define	FKMS_TRACE(dev, msg)						\
+	do {								\
+		if (bootverbose)					\
+			device_printf((dev), "attach: " msg "\n");	\
+	} while (0)
 
 struct vc4_fkms_softc {
 	device_t		bsddev;
@@ -153,7 +160,9 @@ vc4_fkms_attach(device_t dev)
 	 */
 	FKMS_TRACE(dev, "1 ofw_bus_get_node");
 	sc->node.node = (intptr_t)ofw_bus_get_node(dev);
-	device_printf(dev, "attach: node phandle %#lx\n", (long)sc->node.node);
+	if (bootverbose)
+		device_printf(dev, "attach: node phandle %#lx\n",
+		    (long)sc->node.node);
 
 	/*
 	 * Both struct devices are built by hand, and deliberately WITHOUT
@@ -218,7 +227,8 @@ vc4_fkms_attach(device_t dev)
 	 * The master. devm_drm_dev_alloc() ties the drm_device's lifetime to
 	 * this struct device, and to_vc4_dev() finds vc4_dev back from it.
 	 */
-	device_printf(dev, "attach: irq %u\n", sc->pdev.dev.irq);
+	if (bootverbose)
+		device_printf(dev, "attach: irq %u\n", sc->pdev.dev.irq);
 	FKMS_TRACE(dev, "3 dma_priv + devm_drm_dev_alloc");
 	sc->master.bsddev = dev;
 	INIT_LIST_HEAD(&sc->master.devres_head);
