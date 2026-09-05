@@ -727,6 +727,7 @@ jobs:
           cp nbkm-tools/graphics/include/kunit/*.h       /tmp/drm-kmod/include/kunit/
           cp nbkm-tools/graphics/include/linux/gpio/*.h  /tmp/drm-kmod/include/linux/gpio/
           cp nbkm-tools/graphics/include/sound/*.h       /tmp/drm-kmod/include/sound/
+          cp nbkm-tools/graphics/include/drm/*.h         /tmp/drm-kmod/include/drm/ 2>/dev/null || true
           cp -R nbkm-tools/graphics/vc4_kms /tmp/drm-kmod/
           NPROC=$(nproc)
           cd /usr/src

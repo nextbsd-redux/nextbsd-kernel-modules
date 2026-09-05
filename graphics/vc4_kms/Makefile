@@ -87,6 +87,16 @@ CFLAGS+= ${KCONFIG:C/(.*)/-DCONFIG_\1/}
 CFLAGS+= -DCONFIG_RASPBERRYPI_FIRMWARE=1
 CFLAGS+= -DCONFIG_MMU=1
 
+# FreeBSD's LinuxKPI already ships kunit/test-bug.h -- and it is EMPTY. It sits
+# earlier in the -I order than our include dir, so it shadows ours and defines
+# nothing, leaving kunit_fail_current_test() undeclared at all 161 register
+# accesses. Force-include ours so the macro is defined before vc4_drv.h pulls
+# in the empty one.
+#
+# The real fix belongs in the kernel: a dummy header that does not define the
+# macro it exists to stub is not doing its job. Tracked in #51.
+CFLAGS+= -include ${.CURDIR:H}/include/kunit/test-bug.h
+
 # Same narrowing pattern as the fkms probe: of_device_id::data is a
 # const void * and drivers cast it to a per-variant enum.
 # A probe measures the WHOLE gap, so do not let clang stop at its default
