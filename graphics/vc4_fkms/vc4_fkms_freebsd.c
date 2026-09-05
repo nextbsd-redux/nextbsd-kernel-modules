@@ -44,6 +44,9 @@ struct rpi_firmware {
 	device_t	dev;
 };
 
+/* DIAGNOSTIC (#48, revert before merge). */
+void vc4_fkms_mbox_selftest(struct rpi_firmware *fw);
+
 /*
  * Resolve the "brcm,firmware" phandle to the bcm2835_firmware(4) instance.
  *
@@ -74,6 +77,7 @@ devm_rpi_firmware_get(struct device *dev, struct device_node *firmware_node)
 	if (fw == NULL)
 		return (NULL);
 	fw->dev = fwdev;
+	vc4_fkms_mbox_selftest(fw);	/* DIAGNOSTIC (#48) */
 	return (fw);
 }
 
@@ -134,6 +138,52 @@ rpi_firmware_property_list(struct rpi_firmware *fw, void *data, size_t tag_size)
 
 	free(hdr, M_DEVBUF);
 	return (error == 0 ? 0 : -error);
+}
+
+/*
+ * DIAGNOSTIC (nextbsd-kernel-extensions#48, revert before merge).
+ *
+ * SET_PLANE comes back with the firmware's response bit clear, and SET_PLANE
+ * is the only call that goes through the multi-tag list path. Two candidates:
+ * the list marshalling is wrong, or the firmware does not implement that tag.
+ *
+ * Send one tag the firmware certainly does implement -- GET_FIRMWARE_REVISION
+ * -- down BOTH paths and compare. The single-tag path is known good (attach
+ * queries the display through it), so it is the control.
+ *
+ *   list path OK   -> marshalling is fine, SET_PLANE itself is unsupported
+ *   list path FAILS -> the bug is ours, in rpi_firmware_property_list()
+ */
+void
+vc4_fkms_mbox_selftest(struct rpi_firmware *fw)
+{
+	struct {
+		struct rpi_firmware_property_tag_header tag;
+		u32 revision;
+	} msg;
+	u32 rev_single;
+	int error;
+
+	/* Control: the single-tag path, which is known to work. */
+	rev_single = 0;
+	error = rpi_firmware_property(fw, RPI_FIRMWARE_GET_FIRMWARE_REVISION,
+	    &rev_single, sizeof(rev_single));
+	printf("fkms-mbox: SINGLE path: error=%d revision=0x%08x\n",
+	    error, rev_single);
+
+	/* Test: the same tag through the list path SET_PLANE uses. */
+	memset(&msg, 0, sizeof(msg));
+	msg.tag.tag = RPI_FIRMWARE_GET_FIRMWARE_REVISION;
+	msg.tag.buf_size = sizeof(msg.revision);
+	msg.tag.req_resp_size = 0;
+	error = rpi_firmware_property_list(fw, &msg, sizeof(msg));
+	printf("fkms-mbox: LIST   path: error=%d revision=0x%08x "
+	    "(tag=0x%08x buf_size=%u req_resp_size=0x%08x)\n",
+	    error, msg.revision, msg.tag.tag, msg.tag.buf_size,
+	    msg.tag.req_resp_size);
+
+	printf("fkms-mbox: sizeof(set_plane payload sanity) hdr=%zu msg=%zu\n",
+	    sizeof(struct rpi_firmware_property_tag_header), sizeof(msg));
 }
 
 /*
