@@ -29,6 +29,15 @@
 #ifndef	_LINUXKPI_LINUX_INTERRUPT_H_
 #define	_LINUXKPI_LINUX_INTERRUPT_H_
 
+#ifndef LKPI_PFX
+#error "LKPI_PFX must be defined by the module Makefile"
+#endif
+#define	LKPI_IRQ_SYM2(p, n)	p ## n
+#define	LKPI_IRQ_SYM1(p, n)	LKPI_IRQ_SYM2(p, n)
+#define	LKPI_IRQ_SYM(n)		LKPI_IRQ_SYM1(LKPI_PFX, n)
+#define	lkpi_of_request_irq	LKPI_IRQ_SYM(lkpi_of_request_irq)
+#define	lkpi_of_free_irq	LKPI_IRQ_SYM(lkpi_of_free_irq)
+
 #include <linux/cpu.h>
 #include <linux/device.h>
 #include <linux/pci.h>
@@ -47,8 +56,32 @@ typedef	irqreturn_t	(*irq_handler_t)(int, void *);
 
 #define	IRQ_NOTCONNECTED	(1U << 31)
 
+/*
+ * The kernel's, by its real name so the dispatcher below can still reach it.
+ * Deliberately NOT renamed: the untagged path must keep going to the kernel
+ * implementation, which owns the irq_ent list and the devres integration that
+ * firmware KMS runs on today.
+ */
 int  lkpi_request_irq(struct device *, unsigned int, irq_handler_t,
 	irq_handler_t, unsigned long, const char *, void *);
+
+/*
+ * Module-private dispatcher (#51).
+ *
+ * request_irq() off the PCI bus can only allocate rid 0, so a device-tree
+ * device could hold exactly one interrupt. bcm2712 needs more: the HVS
+ * requests three named interrupts (ch0..2-eof, which ARE vblank on gen6) and
+ * the HDMI controller four. Worse, vc4_hvs.c assigns devm_request_irq()'s
+ * return to ret and never checks it, so the second and third failing is silent
+ * -- all three handlers aliased to one line.
+ *
+ * platform_get_irq()/platform_get_irq_byname() return the resource rid tagged
+ * with LKPI_IRQ_OF; this allocates that rid directly. Anything untagged goes
+ * to the kernel unchanged, so the firmware-KMS path is exactly what it was.
+ */
+int  lkpi_of_request_irq(struct device *, unsigned int, irq_handler_t,
+	irq_handler_t, unsigned long, const char *, void *);
+void lkpi_of_free_irq(struct device *, unsigned int, void *);
 int  lkpi_enable_irq(unsigned int);
 void lkpi_disable_irq(unsigned int);
 int  lkpi_bind_irq_to_cpu(unsigned int, int);
@@ -60,7 +93,7 @@ request_irq(unsigned int irq, irq_handler_t handler, unsigned long flags,
     const char *name, void *arg)
 {
 
-	return (lkpi_request_irq(NULL, irq, handler, NULL, flags, name, arg));
+	return (lkpi_of_request_irq(NULL, irq, handler, NULL, flags, name, arg));
 }
 
 static inline int
@@ -69,7 +102,7 @@ request_threaded_irq(int irq, irq_handler_t handler,
     const char *name, void *arg)
 {
 
-	return (lkpi_request_irq(NULL, irq, handler, thread_handler,
+	return (lkpi_of_request_irq(NULL, irq, handler, thread_handler,
 	    flags, name, arg));
 }
 
@@ -78,7 +111,7 @@ devm_request_irq(struct device *dev, int irq,
     irq_handler_t handler, unsigned long flags, const char *name, void *arg)
 {
 
-	return (lkpi_request_irq(dev, irq, handler, NULL, flags, name, arg));
+	return (lkpi_of_request_irq(dev, irq, handler, NULL, flags, name, arg));
 }
 
 static inline int
@@ -87,7 +120,7 @@ devm_request_threaded_irq(struct device *dev, int irq,
     unsigned long flags, const char *name, void *arg)
 {
 
-	return (lkpi_request_irq(dev, irq, handler, thread_handler,
+	return (lkpi_of_request_irq(dev, irq, handler, thread_handler,
 	    flags, name, arg));
 }
 

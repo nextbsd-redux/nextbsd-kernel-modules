@@ -54,7 +54,8 @@ SRCS+=	\
 	lkpi_component.c \
 	lkpi_of.c \
 	lkpi_drm.c \
-	lkpi_platform.c
+	lkpi_platform.c \
+	lkpi_irq.c
 
 # The GEN_4 render path is not built -- vc5_drm_driver registers no ioctls and
 # no DRIVER_RENDER, so vc4_gem.c/vc4_fence.c and the v3d, validate, render_cl
