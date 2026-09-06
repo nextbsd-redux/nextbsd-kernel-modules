@@ -1505,7 +1505,10 @@ static int vc4_crtc_bind(struct device *dev, struct device *master, void *data)
 	if (IS_ERR(vc4_crtc->regs))
 		return PTR_ERR(vc4_crtc->regs);
 
-	vc4_crtc->regset.base = vc4_crtc->regs;
+	/*
+	 * DEVIATION (#51): see the note in vc4_hvs.c -- struct
+	 * debugfs_regset32 has no base member here and nothing reads it.
+	 */
 	vc4_crtc->regset.regs = crtc_regs;
 	vc4_crtc->regset.nregs = ARRAY_SIZE(crtc_regs);
 

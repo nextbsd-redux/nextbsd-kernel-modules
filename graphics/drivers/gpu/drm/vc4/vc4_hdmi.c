@@ -3033,7 +3033,14 @@ static int vc4_hdmi_build_regset(struct drm_device *drm,
 	if (!new_regs)
 		return -ENOMEM;
 
-	regset->base = __vc4_hdmi_get_field_base(vc4_hdmi, reg);
+	/*
+	 * DEVIATION (#51): LinuxKPI's struct debugfs_regset32 has only regs and
+	 * nregs -- no base -- and there is no debugfs_create_regset32() at all,
+	 * so nothing ever reads this. Adding the member would mean shadowing
+	 * <linux/debugfs.h>, which drm core also includes; the rule from
+	 * earlier in #51 is to shadow only headers whose consumers are all
+	 * inside this module. Dropping a write nothing reads costs nothing.
+	 */
 	regset->regs = new_regs;
 	regset->nregs = count;
 

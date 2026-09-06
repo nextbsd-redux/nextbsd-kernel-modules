@@ -41,6 +41,39 @@
 #include <linux/dma-fence.h>
 #include <drm/drm_managed.h>
 
+
+/*
+ * Pixel formats the Raspberry Pi tree adds and drm-kmod does not carry.
+ *
+ * All are 4:2:0 YCbCr the HVS on gen6 can scan out directly, used only by
+ * hvs6_only entries in vc4_plane.c's hvs_formats[]. Missing, they take the
+ * whole table's initialiser with them -- which is where the "incomplete type
+ * 'const struct hvs_format[]'" errors came from, rather than anything wrong
+ * with the table itself.
+ *
+ * fourcc_code() is the standard encoding; these follow it exactly, so the
+ * values match upstream and a buffer negotiated with a Linux client agrees.
+ * Guarded in case drm-kmod picks them up later.
+ */
+#include <drm/drm_fourcc.h>
+
+#ifndef DRM_FORMAT_P030
+/* 2-plane 10-bit 4:2:0, 3 pixels packed per 32 bits */
+#define	DRM_FORMAT_P030		fourcc_code('P', '0', '3', '0')
+#endif
+#ifndef DRM_FORMAT_S010
+/* 3-plane 10-bit 4:2:0, samples in the low bits */
+#define	DRM_FORMAT_S010		fourcc_code('S', '0', '1', '0')
+#endif
+#ifndef DRM_FORMAT_S012
+/* 3-plane 12-bit 4:2:0 */
+#define	DRM_FORMAT_S012		fourcc_code('S', '0', '1', '2')
+#endif
+#ifndef DRM_FORMAT_S016
+/* 3-plane 16-bit 4:2:0 */
+#define	DRM_FORMAT_S016		fourcc_code('S', '0', '1', '6')
+#endif
+
 struct mutex;
 struct drm_device;
 

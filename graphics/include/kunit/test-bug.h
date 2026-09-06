@@ -16,7 +16,14 @@
  * single largest source of noise in the probe -- 161 of 202 errors -- purely
  * because the hook sits inside macros used on every register access.
  *
- * kunit_get_current_test() reports whether a test is running; always NULL here.
+ * kunit_get_current_test() reports whether a test is running; always null here.
+ *
+ * It returns a cast 0 rather than NULL deliberately. This header is
+ * FORCE-INCLUDED (-include) and therefore processed before anything else in
+ * the translation unit, so NULL may not be defined yet -- which produced 17
+ * "use of undeclared identifier 'NULL'" errors. Including a header to get NULL
+ * would impose an include order on every source in the module; a cast constant
+ * needs nothing.
  */
 #ifndef _LINUXKPI_KUNIT_TEST_BUG_H_
 #define	_LINUXKPI_KUNIT_TEST_BUG_H_
@@ -27,7 +34,7 @@ static inline struct kunit *
 kunit_get_current_test(void)
 {
 
-	return (NULL);
+	return ((struct kunit *)0);
 }
 
 #endif /* _LINUXKPI_KUNIT_TEST_BUG_H_ */
