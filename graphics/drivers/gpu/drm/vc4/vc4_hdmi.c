@@ -118,6 +118,13 @@
 /* bit field to force hotplug detection. bit0 = HDMI0 */
 static int force_hotplug;
 module_param(force_hotplug, int, 0644);
+/*
+ * DEVIATION (#51): upstream has no MODULE_PARM_DESC for this parameter, and
+ * LinuxKPI's module_param() expands to reference a linuxkpi_<module>_<name>_desc
+ * symbol that only MODULE_PARM_DESC defines. Without it the module links and
+ * then fails to load with ENOEXEC on linuxkpi_vc4_kms_force_hotplug_desc.
+ */
+MODULE_PARM_DESC(force_hotplug, "Bitfield forcing hotplug detect; bit0 = HDMI0");
 
 static bool vc4_hdmi_supports_scrambling(struct vc4_hdmi *vc4_hdmi)
 {

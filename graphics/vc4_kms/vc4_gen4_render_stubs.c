@@ -182,3 +182,12 @@ vc4_perfmon_get_values_ioctl(struct drm_device *dev __unused,
 	VC4_GEN4_UNREACHABLE("vc4_perfmon_get_values_ioctl");
 	return (-ENODEV);
 }
+
+int
+vc4_gem_madvise_ioctl(struct drm_device *dev __unused, void *data __unused,
+    struct drm_file *file_priv __unused)
+{
+
+	VC4_GEN4_UNREACHABLE("vc4_gem_madvise_ioctl");
+	return (-ENODEV);
+}
