@@ -34,6 +34,7 @@
 #define	LKPI_DRM_SYM1(p, n)	LKPI_DRM_SYM2(p, n)
 #define	LKPI_DRM_SYM(n)		LKPI_DRM_SYM1(LKPI_PFX, n)
 
+#define	drm_print_regset32	LKPI_DRM_SYM(drm_print_regset32)
 #define	drmm_mutex_init		LKPI_DRM_SYM(drmm_mutex_init)
 #define	dma_fence_match_context	LKPI_DRM_SYM(dma_fence_match_context)
 
@@ -235,6 +236,15 @@ static inline void
 cec_phys_addr_invalidate(struct cec_adapter *adap __unused)
 {
 }
+
+/*
+ * Register dump for debugfs. drm-kmod does not export it; see lkpi_drm.c for
+ * why a no-op is the right answer here.
+ */
+struct drm_printer;
+struct debugfs_regset32;
+void	drm_print_regset32(struct drm_printer *p,
+	    struct debugfs_regset32 *regset);
 
 struct mutex;
 struct drm_device;

@@ -115,3 +115,31 @@ platform_get_resource_byname(struct platform_device *pdev, unsigned int type,
 	res->name = name;
 	return (res);
 }
+
+/*
+ * drm_print_regset32() -- register dump for debugfs (#51).
+ *
+ * drm-kmod's drm.ko does not export it, so the kext failed the resolution
+ * gate with ENOEXEC on this one symbol.
+ *
+ * The callers are debugfs show handlers -- vc4_hdmi_debugfs_regs(),
+ * vc4_crtc_debugfs_regs(), vc4_hvs_debugfs_regs(). They are compiled because
+ * upstream does not guard the handler bodies themselves, only their
+ * registration, and this module builds with CONFIG_DEBUG_FS filtered out
+ * because vc4_debugfs.c is not vendored. So nothing registers them and nothing
+ * can call them.
+ *
+ * A no-op rather than a real dump: struct debugfs_regset32 here has no base
+ * member to read from (see the deviations in vc4_hvs.c and vc4_crtc.c), so
+ * there is nothing to print even if a caller existed. It logs once if it is
+ * ever reached, because that would mean the reachability argument above is
+ * wrong.
+ */
+void
+drm_print_regset32(struct drm_printer *p __unused,
+    struct debugfs_regset32 *regset __unused)
+{
+
+	pr_warn_once("vc4_kms: drm_print_regset32 called -- debugfs is not "
+	    "wired up in this module (#51)\n");
+}
