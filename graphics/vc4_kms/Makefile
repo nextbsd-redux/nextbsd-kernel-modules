@@ -1,15 +1,14 @@
-# vc4_kms -- COMPILE PROBE for the full vc4 KMS display pipeline
-# (nextbsd-kernel-extensions#51).
+# vc4_kms -- the full vc4 KMS display pipeline (nextbsd-kernel-extensions#51).
 #
-# Not a port and not a loadable driver. Firmware KMS (#44) brought the device
-# up but cannot program a plane: the 2712 firmware does not service SET_PLANE
-# (#48, measured). The real display pipeline programs the HVS and HDMI PHY
-# directly instead of asking the firmware, so it is a different driver.
+# This STARTED as a compile probe: something to make clang enumerate what a
+# real port was missing, exactly as the #176 probe did. It is no longer that.
+# It builds, links, loads as VideoCore6KMS.kext, and brings up hvs, both
+# pixelvalves, both HDMI controllers and the vc4 master on a Pi 500+.
 #
-# This exists to make clang enumerate what that driver is missing, exactly as
-# the #176 probe did -- that probe turned "port a DRM driver" into a measured
-# list of 15 device-model errors and zero missing DRM symbols, which is a far
-# better basis for scoping than reading 450KB of source.
+# Firmware KMS (#44) brought the device up but cannot program a plane: the 2712
+# firmware does not service SET_PLANE (#48, measured). This driver programs the
+# HVS and HDMI PHY directly instead of asking the firmware, which is the only
+# way to get hardware planes and therefore a hardware cursor.
 #
 # Display-only subset. Deliberately NOT vendored:
 #   vc4_v3d.c, vc4_validate*.c, vc4_render_cl.c, vc4_perfmon.c   -- 3D
