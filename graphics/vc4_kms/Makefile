@@ -54,7 +54,8 @@ SRCS=	\
 # and of_match_device(), which firmware KMS still runs on.
 SRCS+=	\
 	lkpi_component.c \
-	lkpi_of.c
+	lkpi_of.c \
+	lkpi_drm.c
 
 SRCS+=	\
 	vc4_newbus.c \
@@ -144,6 +145,18 @@ CFLAGS+= -DCONFIG_MMU=1
 #
 # The real fix belongs in the kernel: a dummy header that does not define the
 # macro it exists to stub is not doing its job. Tracked in #51.
+# DRM helpers drm-kmod does not provide (drmm_mutex_init,
+# dma_fence_match_context). Force-included rather than shipped as
+# lkpi/linux/<name>.h: shadowing <linux/dma-fence.h> or <drm/drm_managed.h>
+# would override drm-kmod's own copies for this module and drop whatever
+# drm-kmod added to them -- the mistake that broke drm-kmod build on both
+# arches earlier in #51. This header includes the real ones and adds what is
+# missing.
+#
+# vc4_kms ONLY. vc4_fkms does not use either symbol, and leaving it out keeps
+# fkms byte-for-byte unaffected by this change.
+CFLAGS+= -include ${.CURDIR:H}/lkpi/lkpi_drm.h
+
 CFLAGS+= -include ${.CURDIR:H}/include/kunit/test-bug.h
 
 # Same narrowing pattern as the fkms probe: of_device_id::data is a

@@ -934,11 +934,32 @@ static void vc4_write_scaling_parameters(struct drm_plane_state *state,
 
 	WARN_ON_ONCE(vc4->gen > VC4_GEN_6_D);
 
+/*
+ * DEVIATION (nextbsd-kernel-extensions#51): chroma siting.
+ *
+ * Upstream reads state->chroma_siting_h/v, two fields on struct
+ * drm_plane_state. Adding them would mean changing a shared DRM core struct --
+ * drm_plane_state is used by i915, amdgpu, radeon, bochs and virtio_gpu, and
+ * it is allocated by drm.ko, so it cannot be shadowed module-side either. That
+ * is the same class of change as the of_node insertion into struct device that
+ * page-faulted i915kms on a Wyse 5070 (gershwin-desktop#49), and closed PR #56
+ * proposed exactly it.
+ *
+ * The default is used instead. Upstream creates the properties with
+ * drm_plane_create_chroma_siting_properties(plane, 0, 0), so 0 IS the default
+ * siting and behaviour is identical until a userspace client sets the
+ * property. What is lost is the ability to set it -- chroma sample positioning
+ * for YUV overlay planes, which RGB HDMI output does not use.
+ *
+ * Restore by adding the fields to drm_plane_state in a drm-kmod patch, and
+ * only when something actually needs non-default siting.
+ */
 	/* Ch0 H-PPF Word 0: Scaling Parameters */
 	if (vc4_state->x_scaling[channel] == VC4_SCALING_PPF) {
 		vc4_write_ppf(vc4_state, vc4_state->src_w[channel],
 			      vc4_state->crtc_w, vc4_state->src_x, channel,
-			      state->chroma_siting_h,
+			      /* DEVIATION #51: default siting, see above */
+			      0,
 			      no_interpolate);
 	}
 
@@ -946,7 +967,8 @@ static void vc4_write_scaling_parameters(struct drm_plane_state *state,
 	if (vc4_state->y_scaling[channel] == VC4_SCALING_PPF) {
 		vc4_write_ppf(vc4_state, vc4_state->src_h[channel],
 			      vc4_state->crtc_h, vc4_state->src_y, channel,
-			      state->chroma_siting_v,
+			      /* DEVIATION #51: default siting, see above */
+			      0,
 			      no_interpolate);
 		vc4_dlist_write(vc4_state, 0xc0c0c0c0);
 	}
@@ -2798,7 +2820,13 @@ struct drm_plane *vc4_plane_init(struct drm_device *dev,
 						 BIT(DRM_SCALING_FILTER_DEFAULT) |
 						 BIT(DRM_SCALING_FILTER_NEAREST_NEIGHBOR));
 
-	drm_plane_create_chroma_siting_properties(plane, 0, 0);
+	/*
+	 * DEVIATION #51: the chroma-siting properties are not created. See the
+	 * comment above vc4_write_ppf()'s callers -- the fields they would
+	 * drive do not exist on struct drm_plane_state here, and the default
+	 * (0, 0) this call would have installed is what the code now uses
+	 * unconditionally.
+	 */
 
 	if (type == DRM_PLANE_TYPE_PRIMARY)
 		drm_plane_create_zpos_immutable_property(plane, 0);
