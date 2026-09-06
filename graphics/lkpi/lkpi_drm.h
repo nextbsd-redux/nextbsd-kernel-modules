@@ -128,9 +128,27 @@ struct cec_msg {
  * as "type specifier missing" and "expected ')'" rather than as anything
  * recognisable.
  */
-#ifndef MODULE_DEVICE_TABLE
+/*
+ * MODULE_DEVICE_TABLE has to be overridden, not merely supplied: LinuxKPI
+ * already defines it, and its definition expands to
+ *
+ *	DRIVER_MODULE(lkpi_<table>, <bus>, ...)
+ *
+ * which manufactures a newbus driver attached to a bus named by the first
+ * argument. That works for "pci"; vc4 passes "of", which is not a newbus bus
+ * here, and the expansion lands as a malformed declaration -- reported as
+ * "type specifier missing" on the MODULE_DEVICE_TABLE line itself.
+ *
+ * <linux/module.h> is included first so the #undef has something to remove;
+ * this header is force-included, so without that our definition would be
+ * replaced by LinuxKPI's the moment vc4_drv.c pulled module.h in.
+ *
+ * Matching is done by the newbus shims against the driver's own
+ * of_match_table, so nothing is lost by dropping the table registration.
+ */
+#include <linux/module.h>
+#undef MODULE_DEVICE_TABLE
 #define	MODULE_DEVICE_TABLE(type, name)
-#endif
 #ifndef MODULE_ALIAS
 #define	MODULE_ALIAS(x)
 #endif
