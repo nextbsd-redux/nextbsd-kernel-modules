@@ -2614,8 +2614,10 @@ static int vc4_hdmi_hotplug_init(struct vc4_hdmi *vc4_hdmi)
 	if (vc4_hdmi->variant->external_irq_controller) {
 		int hpd = platform_get_irq_byname(pdev, "hpd-connected");
 
-		if (hpd < 0)
+		if (hpd < 0) {
+			ret = hpd;
 			goto no_hpd_irq;
+		}
 
 		ret = devm_request_threaded_irq(&pdev->dev, hpd,
 						NULL,
@@ -2625,8 +2627,10 @@ static int vc4_hdmi_hotplug_init(struct vc4_hdmi *vc4_hdmi)
 			goto no_hpd_irq;
 
 		hpd = platform_get_irq_byname(pdev, "hpd-removed");
-		if (hpd < 0)
+		if (hpd < 0) {
+			ret = hpd;
 			goto no_hpd_irq;
+		}
 
 		ret = devm_request_threaded_irq(&pdev->dev, hpd,
 						NULL,
