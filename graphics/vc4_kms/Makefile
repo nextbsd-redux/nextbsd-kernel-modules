@@ -25,7 +25,7 @@
 
 SRCDIR=	${.CURDIR:H}/drivers/gpu/drm/vc4
 
-.PATH:	${SRCDIR} ${.CURDIR} ${.CURDIR}/lkpi
+.PATH:	${SRCDIR} ${.CURDIR} ${.CURDIR:H}/lkpi
 
 KMOD=	vc4_kms
 
@@ -53,8 +53,8 @@ SRCS=	\
 # those headers so they cannot collide with the kernel's own component_add()
 # and of_match_device(), which firmware KMS still runs on.
 SRCS+=	\
-	vc4_lkpi_component.c \
-	vc4_lkpi_of.c
+	lkpi_component.c \
+	lkpi_of.c
 
 SRCS+=	\
 	vc4_newbus.c \
@@ -118,7 +118,6 @@ CLEANFILES+= ${KMOD}.ko.full ${KMOD}.ko.debug
 # smaller KPI instead.
 CFLAGS+= -I${.CURDIR:H}/lkpi -DLKPI_PFX=${KMOD}_
 
-CFLAGS+= -I${.CURDIR}/lkpi
 
 CFLAGS+= -I${.CURDIR:H}/linuxkpi/gplv2/include
 CFLAGS+= -I${.CURDIR:H}/linuxkpi/bsd/include

@@ -26,11 +26,19 @@
 
 SRCDIR=	${.CURDIR:H}/drivers/gpu/drm/vc4
 
-.PATH:	${SRCDIR} ${.CURDIR}
+.PATH:	${SRCDIR} ${.CURDIR} ${.CURDIR:H}/lkpi
 
 KMOD=	vc4_fkms
 
 EXPORT_SYMS=	YES
+
+# Implementations behind the private LinuxKPI headers below. Required, not
+# optional: those headers #define component_add() and friends onto
+# ${KMOD}_-prefixed symbols, so without these the module builds and then fails
+# to link against names nothing defines.
+SRCS+=	\
+	lkpi_component.c \
+	lkpi_of.c
 
 SRCS=	\
 	vc4_firmware_kms.c \
