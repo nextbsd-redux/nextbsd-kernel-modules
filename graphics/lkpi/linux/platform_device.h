@@ -105,6 +105,7 @@
 #define	lkpi_platform_device_register	LKPI_SYM(lkpi_platform_device_register)
 #define	lkpi_platform_device_unregister	LKPI_SYM(lkpi_platform_device_unregister)
 #define	platform_find_device_by_driver	LKPI_SYM(platform_find_device_by_driver)
+#define	platform_get_resource_byname	LKPI_SYM(platform_get_resource_byname)
 #define	lkpi_platform_get_irq	LKPI_SYM(lkpi_platform_get_irq)
 #define	lkpi_platform_get_irq_byname	LKPI_SYM(lkpi_platform_get_irq_byname)
 #define	lkpi_platform_ioremap_resource	LKPI_SYM(lkpi_platform_ioremap_resource)
@@ -233,6 +234,14 @@ platform_set_drvdata(struct platform_device *pdev, void *data)
  * and a device off the PCI bus has no other way to say so. A device with one
  * unnamed interrupt still works through dev->irq as before.
  */
+/*
+ * The register bank named in the node's reg-names. vc4_hdmi has eight and asks
+ * for each by name. Returns LinuxKPI's struct resource (<linux/ioport.h>),
+ * not FreeBSD's.
+ */
+struct resource *platform_get_resource_byname(struct platform_device *pdev,
+	    unsigned int type, const char *name);
+
 int	lkpi_platform_get_irq(struct platform_device *pdev, unsigned int num);
 int	lkpi_platform_get_irq_byname(struct platform_device *pdev,
 	    const char *name);

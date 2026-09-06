@@ -2376,7 +2376,7 @@ static int vc4_hdmi_audio_init(struct vc4_hdmi *vc4_hdmi)
 	BUILD_BUG_ON(offsetof(struct vc4_hdmi_audio, card) != 0);
 	BUILD_BUG_ON(offsetof(struct vc4_hdmi, audio) != 0);
 
-	if (!of_find_property(dev->of_node, "dmas", &len) || !len) {
+	if (!of_find_property(dev_of_node(dev), "dmas", &len) || !len) {
 		dev_warn(dev,
 			 "'dmas' DT property is missing or empty, no HDMI audio\n");
 		return 0;
@@ -2390,7 +2390,7 @@ static int vc4_hdmi_audio_init(struct vc4_hdmi *vc4_hdmi)
 	/*
 	 * Get the physical address of VC4_HD_MAI_DATA.
 	 */
-	index = of_property_match_string(dev->of_node, "reg-names", "hd");
+	index = of_property_match_string(dev_of_node(dev), "reg-names", "hd");
 	/* Before BCM2711, we don't have a named register range */
 	if (index < 0)
 		index = 1;
@@ -2944,7 +2944,7 @@ static int vc4_hdmi_cec_init(struct vc4_hdmi *vc4_hdmi)
 	struct device *dev = &pdev->dev;
 	int ret;
 
-	if (!of_property_present(dev->of_node, "interrupts")) {
+	if (!of_property_present(dev_of_node(dev), "interrupts")) {
 		dev_warn(dev, "'interrupts' DT property is missing, no CEC\n");
 		return 0;
 	}
@@ -3389,7 +3389,7 @@ static int vc4_hdmi_bind(struct device *dev, struct device *master, void *data)
 	if (ret)
 		return ret;
 
-	ddc_node = of_parse_phandle(dev->of_node, "ddc", 0);
+	ddc_node = of_parse_phandle(dev_of_node(dev), "ddc", 0);
 	if (!ddc_node) {
 		drm_err(drm, "Failed to find ddc node in device tree\n");
 		return -ENODEV;
@@ -3415,7 +3415,7 @@ static int vc4_hdmi_bind(struct device *dev, struct device *master, void *data)
 	}
 
 	vc4_hdmi->disable_wifi_frequencies =
-		of_property_read_bool(dev->of_node, "wifi-2.4ghz-coexistence");
+		of_property_read_bool(dev_of_node(dev), "wifi-2.4ghz-coexistence");
 
 	ret = devm_pm_runtime_enable(dev);
 	if (ret)
@@ -3429,10 +3429,10 @@ static int vc4_hdmi_bind(struct device *dev, struct device *master, void *data)
 	if (ret)
 		return ret;
 
-	if ((of_device_is_compatible(dev->of_node, "brcm,bcm2711-hdmi0") ||
-	     of_device_is_compatible(dev->of_node, "brcm,bcm2711-hdmi1") ||
-	     of_device_is_compatible(dev->of_node, "brcm,bcm2712-hdmi0") ||
-	     of_device_is_compatible(dev->of_node, "brcm,bcm2712-hdmi1")) &&
+	if ((of_device_is_compatible(dev_of_node(dev), "brcm,bcm2711-hdmi0") ||
+	     of_device_is_compatible(dev_of_node(dev), "brcm,bcm2711-hdmi1") ||
+	     of_device_is_compatible(dev_of_node(dev), "brcm,bcm2712-hdmi0") ||
+	     of_device_is_compatible(dev_of_node(dev), "brcm,bcm2712-hdmi1")) &&
 	    HDMI_READ(HDMI_VID_CTL) & VC4_HD_VID_CTL_ENABLE) {
 		clk_prepare_enable(vc4_hdmi->pixel_clock);
 		clk_prepare_enable(vc4_hdmi->hsm_clock);

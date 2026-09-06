@@ -74,6 +74,7 @@
 #define	LKPI_SYM2(p, n)	p ## n
 #define	LKPI_SYM1(p, n)	LKPI_SYM2(p, n)
 #define	LKPI_SYM(n)	LKPI_SYM1(LKPI_PFX, n)
+#define	of_find_i2c_adapter_by_node	LKPI_SYM(of_find_i2c_adapter_by_node)
 #define	of_find_property	LKPI_SYM(of_find_property)
 #define	of_property_match_string	LKPI_SYM(of_property_match_string)
 #define	lkpi_of_match_table	LKPI_SYM(lkpi_of_match_table)
@@ -188,5 +189,15 @@ struct property *of_find_property(const struct device_node *np,
 	    const char *name, int *lenp);
 int	 of_property_match_string(const struct device_node *np,
 	    const char *propname, const char *string);
+
+
+/*
+ * The I2C adapter behind a device-tree node. See lkpi_of.c: this returns NULL
+ * on bcm2712 because the DDC controller ("brcm,brcmstb-i2c") has no FreeBSD
+ * driver, which makes vc4_hdmi defer. Declared so the call compiles and the
+ * limitation is visible rather than a link error.
+ */
+struct i2c_adapter;
+struct i2c_adapter *of_find_i2c_adapter_by_node(struct device_node *np);
 
 #endif

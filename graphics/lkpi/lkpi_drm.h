@@ -166,6 +166,34 @@ struct cec_msg {
 #endif
 
 /*
+ * Request a threaded handler that runs once per interrupt with the line
+ * masked. LinuxKPI's request_irq() already serialises the thread half this
+ * way, so the flag is a no-op rather than unimplemented.
+ */
+#ifndef IRQF_ONESHOT
+#define	IRQF_ONESHOT		0
+#endif
+
+/*
+ * linuxkpi's module_param() expands to a tunable under sysctl _hw_<module>,
+ * and declares the node in no translation unit. vc4_master_newbus.c defines it
+ * once with SYSCTL_NODE; every other file that uses module_param() -- which is
+ * vc4_hdmi.c -- needs the declaration visible. This header is force-included
+ * by vc4_kms and nothing else, so the module name can be spelled here.
+ */
+#include <sys/sysctl.h>
+SYSCTL_DECL(_hw_vc4_kms);
+
+/*
+ * <linux/ioport.h> for LinuxKPI's struct resource and resource_size().
+ * vc4_hdmi uses them for its register banks. Note this is NOT FreeBSD's
+ * struct resource from sys/rman.h -- the two are different types with the same
+ * name, and mixing them is what broke the amdgpu build earlier
+ * (nextbsd/nextbsd-kernel#200).
+ */
+#include <linux/ioport.h>
+
+/*
  * No swiotlb on this platform, so no buffer is ever bounced through one and
  * the answer is always "not from a swiotlb pool". vc4_drv.c uses it to reject
  * an imported dma-buf it would otherwise have to bounce.
