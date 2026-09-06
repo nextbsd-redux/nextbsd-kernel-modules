@@ -89,9 +89,6 @@ dma_fence_match_context(struct dma_fence *fence, u64 context)
  * the life of the device and there are eight per controller, so a free path
  * would be more code than the leak is worth. Stated, not hidden.
  */
-int	lkpi_of_reg_by_index(struct platform_device *pdev, int idx,
-	    uint64_t *startp, uint64_t *lenp);
-
 struct resource *
 platform_get_resource_byname(struct platform_device *pdev, unsigned int type,
     const char *name)

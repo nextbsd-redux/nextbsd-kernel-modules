@@ -102,6 +102,7 @@
 #define	LKPI_SYM1(p, n)	LKPI_SYM2(p, n)
 #define	LKPI_SYM(n)	LKPI_SYM1(LKPI_PFX, n)
 
+#define	lkpi_of_reg_by_index	LKPI_SYM(lkpi_of_reg_by_index)
 #define	lkpi_platform_device_register	LKPI_SYM(lkpi_platform_device_register)
 #define	lkpi_platform_device_unregister	LKPI_SYM(lkpi_platform_device_unregister)
 #define	platform_find_device_by_driver	LKPI_SYM(platform_find_device_by_driver)
@@ -321,6 +322,15 @@ devm_platform_ioremap_resource(struct platform_device *pdev, unsigned int index)
  * detach. Enumeration takes a `start` device and returns the next match after
  * it, which is the iterator vc4_match_add_drivers() expects.
  */
+/*
+ * FreeBSD half of platform_get_resource_byname(): reg entry `idx` as plain
+ * integers. Declared here so both halves see one prototype; they cannot share
+ * a struct resource, because each file gets only one of the two definitions of
+ * that name. See LKPI_NO_IOPORT in lkpi_drm.h.
+ */
+int	lkpi_of_reg_by_index(struct platform_device *pdev, int idx,
+	    uint64_t *startp, uint64_t *lenp);
+
 void	lkpi_platform_device_register(struct platform_device *pdev,
 	    const struct lkpi_driver *drv);
 void	lkpi_platform_device_unregister(struct platform_device *pdev);

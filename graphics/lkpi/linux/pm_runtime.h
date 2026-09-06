@@ -92,6 +92,7 @@ pm_runtime_status_suspended(struct device *dev __unused)
  * assigns it and logs on a negative result -- which is why a void macro is not
  * enough.
  */
+#undef pm_runtime_put
 static inline int
 pm_runtime_put(struct device *dev __unused)
 {
@@ -99,6 +100,7 @@ pm_runtime_put(struct device *dev __unused)
 	return (0);
 }
 
+#undef pm_runtime_put_sync
 static inline int
 pm_runtime_put_sync(struct device *dev __unused)
 {
@@ -125,10 +127,6 @@ devm_pm_runtime_enable(struct device *dev __unused)
 	.runtime_idle = (idle_fn)
 #endif
 
-struct dev_pm_ops {
-	int	(*runtime_suspend)(struct device *);
-	int	(*runtime_resume)(struct device *);
-	int	(*runtime_idle)(struct device *);
-};
+/* struct dev_pm_ops already exists in LinuxKPI; do not redefine it. */
 
 #endif	/* _LINUXKPI_LINUX_PM_RUNTIME_H_ */

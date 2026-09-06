@@ -168,9 +168,14 @@ CFLAGS+= -include ${.CURDIR:H}/lkpi/lkpi_drm.h
 # from sys/rman.h -- not LinuxKPI's identically named one from
 # <linux/ioport.h>, which the force-include above would otherwise give them.
 # One definition per translation unit; see the comment in lkpi_drm.h.
-CFLAGS.lkpi_of.c+=	-DLKPI_NO_IOPORT
+CFLAGS.lkpi_of.c+=		-DLKPI_NO_IOPORT
 CFLAGS.lkpi_platform.c+=	-DLKPI_NO_IOPORT
-CFLAGS.lkpi_irq.c+=	-DLKPI_NO_IOPORT
+CFLAGS.lkpi_irq.c+=		-DLKPI_NO_IOPORT
+CFLAGS.vc4_newbus.c+=		-DLKPI_NO_IOPORT
+CFLAGS.vc4_hvs_newbus.c+=	-DLKPI_NO_IOPORT
+CFLAGS.vc4_crtc_newbus.c+=	-DLKPI_NO_IOPORT
+CFLAGS.vc4_hdmi_newbus.c+=	-DLKPI_NO_IOPORT
+CFLAGS.vc4_master_newbus.c+=	-DLKPI_NO_IOPORT
 
 CFLAGS+= -include ${.CURDIR:H}/include/kunit/test-bug.h
 
