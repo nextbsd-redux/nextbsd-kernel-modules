@@ -691,6 +691,12 @@ jobs:
           # vc4_drv.h does #include "uapi/drm/vc4_drm.h"; drm-kmod ships uapi
           # headers for the drivers it carries and vc4 is not one of them.
           cp nbkm-tools/graphics/include/uapi/drm/*.h   /tmp/drm-kmod/include/uapi/drm/
+          # graphics/lkpi is the private LinuxKPI shared by the vc4 modules.
+          # Their Makefiles add -I${.CURDIR:H}/lkpi, and graphics/ is copied
+          # FLAT into /tmp/drm-kmod, so that resolves to /tmp/drm-kmod/lkpi --
+          # it has to be copied too. The build uses -Werror,-Wmissing-include-dirs,
+          # so a missing -I is a hard error, not a warning.
+          [ -d /tmp/drm-kmod/lkpi ] || cp -R nbkm-tools/graphics/lkpi /tmp/drm-kmod/
           cp -R nbkm-tools/graphics/vc4_fkms /tmp/drm-kmod/
           NPROC=$(nproc)
           cd /usr/src
@@ -728,6 +734,12 @@ jobs:
           cp nbkm-tools/graphics/include/linux/gpio/*.h  /tmp/drm-kmod/include/linux/gpio/
           cp nbkm-tools/graphics/include/sound/*.h       /tmp/drm-kmod/include/sound/
           cp nbkm-tools/graphics/include/drm/*.h         /tmp/drm-kmod/include/drm/ 2>/dev/null || true
+          # graphics/lkpi is the private LinuxKPI shared by the vc4 modules.
+          # Their Makefiles add -I${.CURDIR:H}/lkpi, and graphics/ is copied
+          # FLAT into /tmp/drm-kmod, so that resolves to /tmp/drm-kmod/lkpi --
+          # it has to be copied too. The build uses -Werror,-Wmissing-include-dirs,
+          # so a missing -I is a hard error, not a warning.
+          [ -d /tmp/drm-kmod/lkpi ] || cp -R nbkm-tools/graphics/lkpi /tmp/drm-kmod/
           cp -R nbkm-tools/graphics/vc4_kms /tmp/drm-kmod/
           NPROC=$(nproc)
           cd /usr/src
