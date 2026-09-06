@@ -2615,28 +2615,61 @@ static int vc4_hdmi_hotplug_init(struct vc4_hdmi *vc4_hdmi)
 		int hpd = platform_get_irq_byname(pdev, "hpd-connected");
 
 		if (hpd < 0)
-			return hpd;
+			goto no_hpd_irq;
 
 		ret = devm_request_threaded_irq(&pdev->dev, hpd,
 						NULL,
 						vc4_hdmi_hpd_irq_thread, IRQF_ONESHOT,
 						"vc4 hdmi hpd connected", vc4_hdmi);
 		if (ret)
-			return ret;
+			goto no_hpd_irq;
 
 		hpd = platform_get_irq_byname(pdev, "hpd-removed");
 		if (hpd < 0)
-			return hpd;
+			goto no_hpd_irq;
 
 		ret = devm_request_threaded_irq(&pdev->dev, hpd,
 						NULL,
 						vc4_hdmi_hpd_irq_thread, IRQF_ONESHOT,
 						"vc4 hdmi hpd disconnected", vc4_hdmi);
 		if (ret)
-			return ret;
+			goto no_hpd_irq;
 
 		connector->polled = DRM_CONNECTOR_POLL_HPD;
 	}
+
+	return 0;
+
+no_hpd_irq:
+	/*
+	 * DEVIATION (#51): losing the hotplug interrupt is not fatal.
+	 *
+	 * hdmi0's interrupt-parent is interrupt-controller@7d510600,
+	 * compatible "brcm,bcm2711-l2-intc", and FreeBSD has no driver for
+	 * that controller -- so every interrupt behind it fails to allocate
+	 * and the request comes back -ENXIO. Upstream propagates it and the
+	 * whole bind dies:
+	 *
+	 *	lkpi component: master bind failed: -6
+	 *
+	 * measured on a Pi 500+. Hotplug is a convenience; refusing to bring
+	 * up the display at all because a cable-detect line is unavailable is
+	 * not the right trade, so fall back to polling the connector, which is
+	 * a mode upstream already supports and which detect() serves from the
+	 * firmware EDID path.
+	 *
+	 * This is a REPORTED DEGRADATION, not a fix. The L2 interrupt
+	 * controller is still missing, and the same gap costs the HVS EOF
+	 * interrupts, which ARE vblank on gen6 -- see the sysctl and the
+	 * driver's own "irq 65535" lines. Plugging a monitor in after the
+	 * fact will be noticed a poll interval late, not immediately.
+	 */
+	drm_warn(connector->dev,
+	    "no hotplug interrupt (%d); polling the connector instead. The "
+	    "brcm,bcm2711-l2-intc driver is missing, so vblank is affected "
+	    "too (#51)\n", ret);
+	connector->polled = DRM_CONNECTOR_POLL_CONNECT |
+			    DRM_CONNECTOR_POLL_DISCONNECT;
 
 	return 0;
 }
