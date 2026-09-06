@@ -74,6 +74,41 @@
 #define	DRM_FORMAT_S016		fourcc_code('S', '0', '1', '6')
 #endif
 
+
+/*
+ * struct cec_msg (#51).
+ *
+ * LinuxKPI's <media/cec.h> is a passthrough that never defines it, and vc4_hdmi
+ * embeds one BY VALUE (vc4_hdmi.h: struct cec_msg cec_rx_msg), so struct
+ * vc4_hdmi is incomplete without it and every file touching a vc4_hdmi fails.
+ *
+ * All CEC *code* in vc4_hdmi.c is already behind CONFIG_DRM_VC4_HDMI_CEC,
+ * which this module does not define -- so nothing here is ever read or
+ * transmitted. Only the field's size matters, and it matters only to the
+ * compiler. Laid out as upstream's uapi struct so it stays recognisable if CEC
+ * is ever wired up.
+ */
+#ifndef CEC_MAX_MSG_SIZE
+#define	CEC_MAX_MSG_SIZE	16
+#endif
+
+struct cec_msg {
+	uint64_t	tx_ts;
+	uint64_t	rx_ts;
+	uint32_t	len;
+	uint32_t	timeout;
+	uint32_t	sequence;
+	uint32_t	flags;
+	uint8_t		msg[CEC_MAX_MSG_SIZE];
+	uint8_t		reply;
+	uint8_t		rx_status;
+	uint8_t		tx_status;
+	uint8_t		tx_arb_lost_cnt;
+	uint8_t		tx_nack_cnt;
+	uint8_t		tx_low_drive_cnt;
+	uint8_t		tx_error_cnt;
+};
+
 struct mutex;
 struct drm_device;
 
