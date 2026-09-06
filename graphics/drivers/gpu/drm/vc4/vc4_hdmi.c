@@ -3193,19 +3193,16 @@ static int vc4_hdmi_init_resources(struct drm_device *drm,
 	if (ret)
 		return ret;
 
-	vc4_hdmi->pixel_clock = devm_clk_get(dev, "pixel");
-	if (IS_ERR(vc4_hdmi->pixel_clock)) {
-		ret = PTR_ERR(vc4_hdmi->pixel_clock);
-		if (ret != -EPROBE_DEFER)
-			drm_err(drm, "Failed to get pixel clock\n");
-		return ret;
-	}
+		/*
+	 * DEVIATION (#51): clocks are OPTIONAL -- see the long note in
+	 * vc4_hvs.c. The bcm2712 device tree gives the hdmi nodes no "clocks"
+	 * property, the VideoCore firmware owns these clocks, and every clk_*
+	 * call this file makes (prepare_enable, disable_unprepare,
+	 * set_min_rate, set_rate, get_rate) tolerates NULL.
+	 */
+vc4_hdmi->pixel_clock = devm_clk_get_optional(dev, "pixel");
 
-	vc4_hdmi->hsm_clock = devm_clk_get(dev, "hdmi");
-	if (IS_ERR(vc4_hdmi->hsm_clock)) {
-		drm_err(drm, "Failed to get HDMI state machine clock\n");
-		return PTR_ERR(vc4_hdmi->hsm_clock);
-	}
+	vc4_hdmi->hsm_clock = devm_clk_get_optional(dev, "hdmi");
 	vc4_hdmi->audio_clock = vc4_hdmi->hsm_clock;
 	vc4_hdmi->cec_clock = vc4_hdmi->hsm_clock;
 
@@ -3285,29 +3282,13 @@ static int vc5_hdmi_init_resources(struct drm_device *drm,
 	if (!vc4_hdmi->rm_regs)
 		return -ENOMEM;
 
-	vc4_hdmi->hsm_clock = devm_clk_get(dev, "hdmi");
-	if (IS_ERR(vc4_hdmi->hsm_clock)) {
-		drm_err(drm, "Failed to get HDMI state machine clock\n");
-		return PTR_ERR(vc4_hdmi->hsm_clock);
-	}
+	vc4_hdmi->hsm_clock = devm_clk_get_optional(dev, "hdmi");
 
-	vc4_hdmi->pixel_bvb_clock = devm_clk_get(dev, "bvb");
-	if (IS_ERR(vc4_hdmi->pixel_bvb_clock)) {
-		drm_err(drm, "Failed to get pixel bvb clock\n");
-		return PTR_ERR(vc4_hdmi->pixel_bvb_clock);
-	}
+	vc4_hdmi->pixel_bvb_clock = devm_clk_get_optional(dev, "bvb");
 
-	vc4_hdmi->audio_clock = devm_clk_get(dev, "audio");
-	if (IS_ERR(vc4_hdmi->audio_clock)) {
-		drm_err(drm, "Failed to get audio clock\n");
-		return PTR_ERR(vc4_hdmi->audio_clock);
-	}
+	vc4_hdmi->audio_clock = devm_clk_get_optional(dev, "audio");
 
-	vc4_hdmi->cec_clock = devm_clk_get(dev, "cec");
-	if (IS_ERR(vc4_hdmi->cec_clock)) {
-		drm_err(drm, "Failed to get CEC clock\n");
-		return PTR_ERR(vc4_hdmi->cec_clock);
-	}
+	vc4_hdmi->cec_clock = devm_clk_get_optional(dev, "cec");
 
 	vc4_hdmi->reset = devm_reset_control_get(dev, NULL);
 	if (IS_ERR(vc4_hdmi->reset)) {
