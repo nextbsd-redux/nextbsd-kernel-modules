@@ -1886,6 +1886,26 @@ static bool vc5_hdmi_hp_detect(struct vc4_hdmi *vc4_hdmi)
 	return !!(hotplug & VC4_HDMI_HOTPLUG_CONNECTED);
 }
 
+/*
+ * DEVIATION (nextbsd-kernel-extensions#51): HDMI audio is not built.
+ *
+ * Everything from here to vc4_hdmi_audio_init() is the ASoC codec: MAI clock
+ * setup, the DAI ops, the snd_soc_component_driver, and the card/link
+ * registration. It needs a working ALSA SoC core -- snd_soc_pcm_runtime,
+ * snd_soc_dai, the SNDRV_PCM_* rate and format constants, IEC958 framing --
+ * none of which exists on FreeBSD. Stubbing that surface would mean inventing
+ * a dozen types and twenty constants for code that can never run, since there
+ * is no ALSA core for it to register a card with.
+ *
+ * Upstream guards CEC with CONFIG_DRM_VC4_HDMI_CEC but leaves audio
+ * unconditional, so there is no existing switch to reuse; this introduces one.
+ * Define CONFIG_DRM_VC4_HDMI_AUDIO to build it, once there is something for it
+ * to talk to.
+ *
+ * Display is unaffected. vc4_hdmi_audio_init()'s only caller checks its return
+ * and the stub reports success, so the probe path is unchanged.
+ */
+#if defined(CONFIG_DRM_VC4_HDMI_AUDIO)
 /* HDMI audio codec callbacks */
 static void vc4_hdmi_audio_set_mai_clock(struct vc4_hdmi *vc4_hdmi,
 					 unsigned int samplerate)
@@ -2473,6 +2493,20 @@ static int vc4_hdmi_audio_init(struct vc4_hdmi *vc4_hdmi)
 	return ret;
 
 }
+#else	/* !CONFIG_DRM_VC4_HDMI_AUDIO */
+
+static int
+vc4_hdmi_audio_init(struct vc4_hdmi *vc4_hdmi __unused)
+{
+
+	/*
+	 * Success: there is no audio to bring up, and failing here would fail
+	 * the whole HDMI probe and take the display with it.
+	 */
+	return (0);
+}
+
+#endif	/* CONFIG_DRM_VC4_HDMI_AUDIO */
 
 static irqreturn_t vc4_hdmi_hpd_irq_thread(int irq, void *priv)
 {

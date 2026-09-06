@@ -532,3 +532,70 @@ lkpi_of_match_table(struct device *dev)
 	mtx_unlock(&lkpi_of_mtx);
 	return (m);
 }
+
+/*
+ * of_find_property() -- vc4_hdmi uses it only to ask whether a property
+ * exists ("dmas"), never to read the value back, so returning a non-NULL
+ * sentinel for "present" is enough and avoids inventing a struct property
+ * whose contents nothing reads.
+ */
+struct property *
+of_find_property(const struct device_node *np, const char *name, int *lenp)
+{
+#ifdef FDT
+	static int present;		/* address used as a sentinel */
+	phandle_t node;
+	ssize_t len;
+
+	if (np == NULL || name == NULL)
+		return (NULL);
+	node = (phandle_t)np->node;
+	if (node == 0)
+		return (NULL);
+	len = OF_getproplen(node, name);
+	if (len < 0)
+		return (NULL);
+	if (lenp != NULL)
+		*lenp = (int)len;
+	return ((struct property *)&present);
+#else
+	return (NULL);
+#endif
+}
+
+/*
+ * Index of `string` within a string-list property, or -ENODATA. The property
+ * is a sequence of NUL-terminated strings, the same shape interrupt-names has.
+ */
+int
+of_property_match_string(const struct device_node *np, const char *propname,
+    const char *string)
+{
+#ifdef FDT
+	char *vals;
+	phandle_t node;
+	int i, len, off;
+
+	if (np == NULL || propname == NULL || string == NULL)
+		return (-EINVAL);
+	node = (phandle_t)np->node;
+	if (node == 0)
+		return (-EINVAL);
+
+	len = OF_getprop_alloc(node, propname, (void **)&vals);
+	if (len <= 0)
+		return (-ENODATA);
+
+	for (i = 0, off = 0; off < len; i++) {
+		if (strcmp(&vals[off], string) == 0) {
+			OF_prop_free(vals);
+			return (i);
+		}
+		off += strlen(&vals[off]) + 1;
+	}
+	OF_prop_free(vals);
+	return (-ENODATA);
+#else
+	return (-ENODATA);
+#endif
+}

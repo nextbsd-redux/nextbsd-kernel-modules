@@ -34,11 +34,7 @@ struct snd_soc_pcm_runtime;
  * wired up here, and these exist so the display half compiles. Sizes need not
  * match Linux, because no ALSA core on this system ever sees one.
  */
-struct snd_soc_jack {
-	struct snd_soc_card	*card;
-	int			 status;
-};
-
+/* struct snd_soc_jack lives in <sound/jack.h>; do not duplicate it. */
 struct snd_soc_dai_link_component {
 	const char		*name;
 	struct device_node	*of_node;

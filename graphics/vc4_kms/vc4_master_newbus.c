@@ -49,6 +49,7 @@
 #include <sys/bus.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
+#include <sys/sysctl.h>
 #include <sys/rman.h>
 
 #include <dev/ofw/openfirm.h>
@@ -61,6 +62,16 @@
 #include <linux/component.h>
 
 #include "vc4_newbus.h"
+
+/*
+ * linuxkpi's moduleparam.h expands a driver's tunables under a sysctl node it
+ * does not itself declare, so vc4_hdmi.c's module_param(force_hotplug, ...)
+ * refers to sysctl___hw_vc4_kms with nothing defining it. Declared here, once
+ * -- bochs recorded that having it in two translation units is a duplicate
+ * symbol at link time rather than a warning.
+ */
+SYSCTL_NODE(_hw, OID_AUTO, vc4_kms, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "VideoCore VI KMS");
 
 /* Non-static in the vendored vc4_drv.c. */
 extern struct platform_driver vc4_platform_driver;
