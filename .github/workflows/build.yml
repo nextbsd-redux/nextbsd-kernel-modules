@@ -759,6 +759,11 @@ jobs:
           L=/tmp/vc4kms-probe.log
           [ -f "$L" ] || { echo "no probe log"; exit 0; }
           echo "=== did it LINK? (the real question now the shims exist)"
+          # Stage it for packaging, same as vc4_fkms above. Without this the
+          # module builds and is then thrown away, which is why it appeared in
+          # neither graphics-kexts-*.tar.gz nor nextbsd-modules-*.tar.gz and
+          # could not be tested on hardware at all.
+          cp /tmp/drm-kmod/vc4_kms/vc4_kms.ko /tmp/ko-out/ 2>/dev/null || true
           ls -l /tmp/drm-kmod/vc4_kms/vc4_kms.ko 2>/dev/null \
             && echo "    *** vc4_kms.ko BUILT ***" \
             || echo "    no vc4_kms.ko -- still incomplete, gaps below"
@@ -1179,6 +1184,25 @@ jobs:
                  -l org.nextbsd.kext.iographicsdma \
                  -l org.nextbsd.kext.iographicsextras \
                  "$KO/vc4_fkms.ko" VideoCoreKMS org.nextbsd.kext.videocorekms
+          fi
+          # VideoCore6KMS -- the full VC4 KMS display pipeline for BCM2712
+          # (#51). Distinct from VideoCoreKMS above, which is FIRMWARE KMS:
+          # that one asks the VideoCore firmware to program the display over a
+          # mailbox, this one programs the HVS and pixelvalves directly, which
+          # is the only way to get hardware planes and therefore a hardware
+          # cursor (#48).
+          #
+          # THE TWO MUST NOT BOTH BE LOADED. Both drive the same display. They
+          # ship together deliberately so the full pipeline can be developed on
+          # hardware by swapping which one is kextload'ed, and neither carries
+          # IOKitPersonalities, so neither loads on its own.
+          #
+          # arm64 only, for the same reason as firmware KMS.
+          if [ -f "$KO/vc4_kms.ko" ]; then
+            "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.dmabuf \
+                 -l org.nextbsd.kext.iographicsdma \
+                 -l org.nextbsd.kext.iographicsextras \
+                 "$KO/vc4_kms.ko" VideoCore6KMS org.nextbsd.kext.videocore6kms
           fi
           if [ -f "$KO/virtio_gpu_drm.ko" ] && [ -f pers/VirtIOGraphics.iokitpersonalities ]; then
             "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.dmabuf \
