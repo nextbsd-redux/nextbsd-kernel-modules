@@ -325,10 +325,31 @@ lkpi_platform_ioremap_resource(struct platform_device *pdev, unsigned int index)
 
 	if (pdev == NULL || pdev->dev.bsddev == NULL)
 		return (ERR_PTR(-ENODEV));
+
+	/*
+	 * RF_ACTIVE alone. RF_SHAREABLE is an interrupt convention -- a
+	 * driver's own registers are allocated exclusively -- and asking for a
+	 * shareable memory resource here failed on a Pi 500+:
+	 *
+	 *	vc4_hvs0 ... mem 0x107c580000-0x107c599fff   (the range exists)
+	 *	lkpi component: master bind failed: -12      (ENOMEM from here)
+	 *
+	 * The range was in the device's resource list the whole time; the flag
+	 * was the problem.
+	 */
 	res = bus_alloc_resource_any(pdev->dev.bsddev, SYS_RES_MEMORY, &rid,
-	    RF_ACTIVE | RF_SHAREABLE);
-	if (res == NULL)
+	    RF_ACTIVE);
+	if (res == NULL) {
+		/*
+		 * Say which rid failed. This returns ENOMEM to a Linux caller
+		 * that will propagate it as a bind failure several frames away,
+		 * and "-12" on its own says nothing about which register bank
+		 * of which device could not be mapped.
+		 */
+		device_printf(pdev->dev.bsddev,
+		    "could not map register bank %u (#51)\n", index);
 		return (ERR_PTR(-ENOMEM));
+	}
 	/*
 	 * NOT rman_get_bushandle(): that is a bus_space_handle_t, which on some
 	 * architectures is not pointer-sized, so casting it to void * is wrong

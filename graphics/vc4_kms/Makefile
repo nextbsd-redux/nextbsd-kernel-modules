@@ -1,15 +1,14 @@
-# vc4_kms -- COMPILE PROBE for the full vc4 KMS display pipeline
-# (nextbsd-kernel-extensions#51).
+# vc4_kms -- the full vc4 KMS display pipeline (nextbsd-kernel-extensions#51).
 #
-# Not a port and not a loadable driver. Firmware KMS (#44) brought the device
-# up but cannot program a plane: the 2712 firmware does not service SET_PLANE
-# (#48, measured). The real display pipeline programs the HVS and HDMI PHY
-# directly instead of asking the firmware, so it is a different driver.
+# This STARTED as a compile probe: something to make clang enumerate what a
+# real port was missing, exactly as the #176 probe did. It is no longer that.
+# It builds, links, loads as VideoCore6KMS.kext, and brings up hvs, both
+# pixelvalves, both HDMI controllers and the vc4 master on a Pi 500+.
 #
-# This exists to make clang enumerate what that driver is missing, exactly as
-# the #176 probe did -- that probe turned "port a DRM driver" into a measured
-# list of 15 device-model errors and zero missing DRM symbols, which is a far
-# better basis for scoping than reading 450KB of source.
+# Firmware KMS (#44) brought the device up but cannot program a plane: the 2712
+# firmware does not service SET_PLANE (#48, measured). This driver programs the
+# HVS and HDMI PHY directly instead of asking the firmware, which is the only
+# way to get hardware planes and therefore a hardware cursor.
 #
 # Display-only subset. Deliberately NOT vendored:
 #   vc4_v3d.c, vc4_validate*.c, vc4_render_cl.c, vc4_perfmon.c   -- 3D
@@ -25,7 +24,7 @@
 
 SRCDIR=	${.CURDIR:H}/drivers/gpu/drm/vc4
 
-.PATH:	${SRCDIR} ${.CURDIR} ${.CURDIR:H}/lkpi
+.PATH:	${SRCDIR} ${.CURDIR} ${.CURDIR:H}/lkpi ${.CURDIR:H}/vc4_fkms
 
 KMOD=	vc4_kms
 
@@ -55,7 +54,9 @@ SRCS+=	\
 	lkpi_of.c \
 	lkpi_drm.c \
 	lkpi_platform.c \
-	lkpi_irq.c
+	lkpi_irq.c \
+	lkpi_rpi_firmware.c \
+	vc4_fkms_freebsd.c
 
 # The GEN_4 render path is not built -- vc5_drm_driver registers no ioctls and
 # no DRIVER_RENDER, so vc4_gem.c/vc4_fence.c and the v3d, validate, render_cl
@@ -140,7 +141,12 @@ CFLAGS+= -I${.CURDIR}		# vc4_newbus.h, next to the shims
 
 CFLAGS+= '-DKBUILD_MODNAME="${KMOD}"'
 CFLAGS+= '-DLINUXKPI_PARAM_PREFIX=vc4_kms_' -DDRM_SYSCTL_PARAM_PREFIX=_${KMOD}
-CFLAGS+= ${KCONFIG:C/(.*)/-DCONFIG_\1/}
+# CONFIG_DEBUG_FS is filtered out: vc4_debugfs.c is not vendored, so the
+# debugfs entry points it defines -- vc4_debugfs_init(), vc4_debugfs_add_regset32()
+# -- do not exist, and the guarded calls would link against nothing. drm's
+# drm_print_regset32() goes with them. Turning the option off compiles the
+# calls out instead, which is what the #ifdef CONFIG_DEBUG_FS guards are for.
+CFLAGS+= ${KCONFIG:NDEBUG_FS:C/(.*)/-DCONFIG_\1/}
 CFLAGS+= -DCONFIG_RASPBERRYPI_FIRMWARE=1
 CFLAGS+= -DCONFIG_MMU=1
 
@@ -168,6 +174,10 @@ CFLAGS+= -include ${.CURDIR:H}/lkpi/lkpi_drm.h
 # from sys/rman.h -- not LinuxKPI's identically named one from
 # <linux/ioport.h>, which the force-include above would otherwise give them.
 # One definition per translation unit; see the comment in lkpi_drm.h.
+# vc4_kms gets vc4_ioremap_regs() from upstream vc4_drv.c; the fkms copy of
+# it would be a duplicate symbol at link time.
+CFLAGS.vc4_fkms_freebsd.c+=	-DLKPI_NO_VC4_IOREMAP
+
 CFLAGS.lkpi_of.c+=		-DLKPI_NO_IOPORT
 CFLAGS.lkpi_platform.c+=	-DLKPI_NO_IOPORT
 CFLAGS.lkpi_irq.c+=		-DLKPI_NO_IOPORT

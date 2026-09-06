@@ -148,3 +148,50 @@ static driver_t vc4_master_newbus_driver = {
  */
 DRIVER_MODULE(vc4, simplebus, vc4_master_newbus_driver, 0, 0);
 DRIVER_MODULE(vc4_ofwbus, ofwbus, vc4_master_newbus_driver, 0, 0);
+MODULE_VERSION(vc4_kms, 1);
+
+/*
+ * Module dependencies. Without these the module declares none at all, and
+ * kextload fails before anything is linked:
+ *
+ *	kldload(.../VideoCore6KMS): No such file or directory
+ *	kextload: load failed (OSReturn 0xdc008016)
+ *
+ * Measured on a Pi 500+ -- the ENOENT is the kernel loader refusing the
+ * module, not a missing file, and it happens even with every dependency
+ * already resident. The accompanying "no kmod_info symbol or bad Mach-O
+ * layout" is a red herring: that validator looks for Mach-O structure in an
+ * ELF module and says the same of firmware KMS, which loads.
+ *
+ * The set matches vc4_fkms, which is the proven one on this hardware:
+ *
+ *   drmn                the DRM core
+ *   drm_dma_helpers     drm_gem_dma_*, which vc4 allocates every buffer through
+ *   drm_extra_helpers   drm_gem_fb_create() and the rest drm-kmod does not ship
+ *   linuxkpi            everything the vendored sources are written against
+ *
+ * MODULE_DEPEND is DEPTH-1: the kernel linker searches only a module's own
+ * declared dependencies, so having a module loaded is not the same as being
+ * able to link against it. vc4_fkms_master.c records measuring exactly that --
+ * "link_elf: symbol drm_gem_fb_create undefined" with IOGraphicsExtras already
+ * loaded and exporting it.
+ */
+MODULE_DEPEND(vc4_kms, drmn, 2, 2, 2);
+MODULE_DEPEND(vc4_kms, drm_dma_helpers, 1, 1, 1);
+MODULE_DEPEND(vc4_kms, drm_extra_helpers, 1, 1, 1);
+MODULE_DEPEND(vc4_kms, linuxkpi, 1, 1, 1);
+/*
+ * dmabuf, which vc4_fkms does NOT declare and does not need.
+ *
+ * vc4_crtc.c's async page flip calls dma_resv_get_singleton() on the
+ * non-GEN_4 path, to get one fence to wait on before flipping. DMABuf.kext
+ * exports it -- verified, the installed binary is byte-identical to the built
+ * one -- but having it loaded is not enough, because MODULE_DEPEND is depth-1
+ * and the linker searches only declared edges:
+ *
+ *	link_elf: symbol dma_resv_get_singleton undefined
+ *
+ * measured on a Pi 500+ with DMABuf resident and exporting the symbol. Same
+ * trap the drm_extra_helpers comment above describes, one module further out.
+ */
+MODULE_DEPEND(vc4_kms, dmabuf, 1, 1, 1);

@@ -51,6 +51,7 @@ struct lkpi_of_irq {
 	struct resource			*res;
 	void				*cookie;
 	irq_handler_t			 handler;
+	irq_handler_t			 thread_handler;
 	void				*handler_arg;
 };
 
@@ -63,21 +64,62 @@ MTX_SYSINIT(lkpi_of_irq_mtx, &lkpi_of_irq_mtx, "lkpi-of-irqs", MTX_DEF);
  * Linux handlers return irqreturn_t and take (irq, arg); newbus wants a void
  * filter taking a single cookie. This adapts one to the other.
  *
- * Registered as a FILTER, not an ithread handler, because the Linux contract
- * is that the primary handler runs in interrupt context and returns quickly.
- * A driver wanting thread context asks for it explicitly through
- * request_threaded_irq(), which is handled below.
+ * Registered as a FILTER because the Linux contract is that the primary
+ * handler runs in interrupt context and returns quickly. The two models line
+ * up almost exactly: Linux's primary/threaded split is newbus's filter/ithread
+ * split, and IRQ_WAKE_THREAD is FILTER_SCHEDULE_THREAD.
  */
 static int
 lkpi_of_irq_filter(void *p)
 {
 	struct lkpi_of_irq *e = p;
+	irqreturn_t ret;
 
+	/*
+	 * No primary handler. Linux substitutes irq_default_primary_handler(),
+	 * which does nothing but wake the thread, and that is not a corner
+	 * case here -- every threaded request vc4_hdmi.c makes passes NULL:
+	 *
+	 *	devm_request_threaded_irq(&pdev->dev, hpd, NULL,
+	 *	    vc4_hdmi_hpd_irq_thread, IRQF_ONESHOT, ...)
+	 *
+	 * so all of the work is in the thread half.
+	 */
 	if (e->handler == NULL)
-		return (FILTER_STRAY);
-	if (e->handler((int)e->irq, e->handler_arg) == IRQ_HANDLED)
+		return (e->thread_handler != NULL ?
+		    FILTER_SCHEDULE_THREAD : FILTER_STRAY);
+
+	ret = e->handler((int)e->irq, e->handler_arg);
+	if (ret == IRQ_WAKE_THREAD) {
+		/*
+		 * Asking for a thread that was never registered would panic in
+		 * the ithread layer, so a mismatched pair is treated as merely
+		 * handled.
+		 */
+		return (e->thread_handler != NULL ?
+		    FILTER_SCHEDULE_THREAD : FILTER_HANDLED);
+	}
+	if (ret == IRQ_HANDLED)
 		return (FILTER_HANDLED);
 	return (FILTER_STRAY);
+}
+
+/*
+ * The thread half. newbus runs this on the interrupt's own ithread once the
+ * filter returns FILTER_SCHEDULE_THREAD.
+ *
+ * IRQF_ONESHOT, which is what vc4_hdmi passes, asks Linux to keep the line
+ * masked until the thread completes. newbus already does not re-run a source
+ * while its ithread is pending, so the flag needs no extra handling -- but
+ * that is a property of the ithread layer being relied on, not a coincidence.
+ */
+static void
+lkpi_of_irq_thread(void *p)
+{
+	struct lkpi_of_irq *e = p;
+
+	if (e->thread_handler != NULL)
+		e->thread_handler((int)e->irq, e->handler_arg);
 }
 
 int
@@ -101,21 +143,6 @@ lkpi_of_request_irq(struct device *xdev, unsigned int irq,
 	if (xdev == NULL || xdev->bsddev == NULL)
 		return (-ENXIO);
 
-	/*
-	 * A threaded handler on a tagged rid is not supported: the kernel's
-	 * taskqueue plumbing for that lives in linux_interrupt.c and is not
-	 * reachable here. Nothing on 2712 asks for one -- the HVS EOF and HDMI
-	 * hotplug handlers are all primary -- but say so rather than silently
-	 * dropping the thread half, which is exactly the class of bug this
-	 * file exists to fix.
-	 */
-	if (thread_handler != NULL) {
-		device_printf(xdev->bsddev,
-		    "%s: threaded IRQ on a device-tree rid is unimplemented "
-		    "(#51)\n", name != NULL ? name : "lkpi");
-		return (-ENOTSUP);
-	}
-
 	rid = LKPI_IRQ_OF_RID(irq);
 	resflags = RF_ACTIVE;
 	if ((flags & IRQF_SHARED) != 0)
@@ -131,10 +158,12 @@ lkpi_of_request_irq(struct device *xdev, unsigned int irq,
 	e->arg = arg;
 	e->res = res;
 	e->handler = handler;
+	e->thread_handler = thread_handler;
 	e->handler_arg = arg;
 
 	error = bus_setup_intr(xdev->bsddev, res,
-	    INTR_TYPE_MISC | INTR_MPSAFE, lkpi_of_irq_filter, NULL, e,
+	    INTR_TYPE_MISC | INTR_MPSAFE, lkpi_of_irq_filter,
+	    thread_handler != NULL ? lkpi_of_irq_thread : NULL, e,
 	    &e->cookie);
 	if (error != 0) {
 		bus_release_resource(xdev->bsddev, SYS_RES_IRQ, rid, res);

@@ -55,6 +55,7 @@
 #include <sound/jack.h>
 #include <sound/pcm_drm_eld.h>
 #include <sound/pcm_params.h>
+#include <soc/bcm2835/raspberrypi-firmware.h>	/* firmware EDID (#51) */
 #include <sound/soc.h>
 #include "media/cec.h"
 #include "vc4_drv.h"
@@ -117,6 +118,13 @@
 /* bit field to force hotplug detection. bit0 = HDMI0 */
 static int force_hotplug;
 module_param(force_hotplug, int, 0644);
+/*
+ * DEVIATION (#51): upstream has no MODULE_PARM_DESC for this parameter, and
+ * LinuxKPI's module_param() expands to reference a linuxkpi_<module>_<name>_desc
+ * symbol that only MODULE_PARM_DESC defines. Without it the module links and
+ * then fails to load with ENOEXEC on linuxkpi_vc4_kms_force_hotplug_desc.
+ */
+MODULE_PARM_DESC(force_hotplug, "Bitfield forcing hotplug detect; bit0 = HDMI0");
 
 static bool vc4_hdmi_supports_scrambling(struct vc4_hdmi *vc4_hdmi)
 {
@@ -359,6 +367,15 @@ static int vc4_hdmi_reset_link(struct drm_connector *connector,
 		return 0;
 	}
 
+	/*
+	 * DEVIATION (#51): SCDC is a real i2c transaction, so it needs a real
+	 * adapter. Without one, report "not scrambling" rather than
+	 * dereferencing NULL -- the caller then declines modes that require
+	 * scrambling (>340 MHz TMDS) instead of driving them misconfigured.
+	 */
+	if (connector->ddc == NULL)
+		return (false);
+
 	ret = drm_scdc_readb(connector->ddc, SCDC_TMDS_CONFIG, &config);
 	if (ret < 0) {
 		drm_err(drm, "Failed to read TMDS config: %d\n", ret);
@@ -385,6 +402,74 @@ static int vc4_hdmi_reset_link(struct drm_connector *connector,
 	return reset_pipe(crtc, ctx);
 }
 
+/*
+ * DEVIATION (nextbsd-kernel-extensions#51): EDID over the firmware mailbox.
+ *
+ * vc4_hdmi reads EDID over DDC, an i2c bus. On bcm2712 that controller is
+ * ddc0/ddc1 at 0x7d508200, compatible "brcm,brcmstb-i2c" -- a Broadcom STB
+ * controller with no FreeBSD driver, so of_find_i2c_adapter_by_node() returns
+ * NULL and there is no adapter to read from.
+ *
+ * The VideoCore firmware can read it instead. That is not a workaround
+ * invented here: it is exactly what vc4_firmware_kms.c does today on this
+ * hardware, over RPI_FIRMWARE_GET_EDID_BLOCK_DISPLAY, and it is why firmware
+ * KMS shows a picture without touching DDC at all.
+ *
+ * Firmware display numbers are fixed (vc4_firmware_kms.c:342): HDMI0 is 2 and
+ * HDMI1 is 7.
+ *
+ * Used ONLY when ddc is NULL. With a real adapter the upstream path is taken
+ * unchanged, so this disappears the day a brcmstb-i2c driver exists.
+ */
+#define	VC4_FW_DISPLAY_HDMI0	2
+#define	VC4_FW_DISPLAY_HDMI1	7
+
+struct vc4_hdmi_fw_edid {
+	u32	tag1, tag1_size, tag1_flags;
+	u32	block;
+	u32	display_number;
+	u32	status;
+	u8	edid[128];
+};
+
+static int
+vc4_hdmi_fw_get_edid_block(void *data, u8 *buf, unsigned int block, size_t len)
+{
+	struct vc4_hdmi *vc4_hdmi = data;
+	struct vc4_dev *vc4 = to_vc4_dev(vc4_hdmi->connector.dev);
+	struct vc4_hdmi_fw_edid mb = {
+		.tag1 = RPI_FIRMWARE_GET_EDID_BLOCK_DISPLAY,
+		.tag1_size = 128 + 8,
+		.block = block,
+		.display_number =
+		    vc4_hdmi->variant->encoder_type == VC4_ENCODER_TYPE_HDMI1 ?
+		    VC4_FW_DISPLAY_HDMI1 : VC4_FW_DISPLAY_HDMI0,
+	};
+	int ret;
+
+	if (vc4 == NULL || vc4->firmware == NULL || len > sizeof(mb.edid))
+		return (-ENODEV);
+
+	ret = rpi_firmware_property_list(vc4->firmware, &mb, sizeof(mb));
+	if (ret != 0)
+		return (ret);
+	memcpy(buf, mb.edid, len);
+	return (0);
+}
+
+/*
+ * EDID from whichever source this board actually has. See the note above.
+ */
+static const struct drm_edid *
+vc4_hdmi_read_edid(struct vc4_hdmi *vc4_hdmi, struct drm_connector *connector)
+{
+
+	if (vc4_hdmi->ddc != NULL)
+		return (drm_edid_read_ddc(connector, vc4_hdmi->ddc));
+	return (drm_edid_read_custom(connector, vc4_hdmi_fw_get_edid_block,
+	    vc4_hdmi));
+}
+
 static void vc4_hdmi_handle_hotplug(struct vc4_hdmi *vc4_hdmi,
 				    struct drm_modeset_acquire_ctx *ctx,
 				    enum drm_connector_status status)
@@ -408,7 +493,7 @@ static void vc4_hdmi_handle_hotplug(struct vc4_hdmi *vc4_hdmi,
 	 */
 
 	if (status != connector_status_disconnected)
-		drm_edid = drm_edid_read_ddc(connector, vc4_hdmi->ddc);
+		drm_edid = vc4_hdmi_read_edid(vc4_hdmi, connector);
 
 	/*
 	 * Report plugged/unplugged events to ALSA jack detection.  Do this
@@ -507,7 +592,7 @@ static int vc4_hdmi_connector_get_modes(struct drm_connector *connector)
 	 * the lock for now.
 	 */
 
-	drm_edid = drm_edid_read_ddc(connector, vc4_hdmi->ddc);
+	drm_edid = vc4_hdmi_read_edid(vc4_hdmi, connector);
 	drm_edid_connector_update(connector, drm_edid);
 	cec_s_phys_addr(vc4_hdmi->cec_adap,
 			connector->display_info.source_physical_address, false);
@@ -2529,29 +2614,66 @@ static int vc4_hdmi_hotplug_init(struct vc4_hdmi *vc4_hdmi)
 	if (vc4_hdmi->variant->external_irq_controller) {
 		int hpd = platform_get_irq_byname(pdev, "hpd-connected");
 
-		if (hpd < 0)
-			return hpd;
+		if (hpd < 0) {
+			ret = hpd;
+			goto no_hpd_irq;
+		}
 
 		ret = devm_request_threaded_irq(&pdev->dev, hpd,
 						NULL,
 						vc4_hdmi_hpd_irq_thread, IRQF_ONESHOT,
 						"vc4 hdmi hpd connected", vc4_hdmi);
 		if (ret)
-			return ret;
+			goto no_hpd_irq;
 
 		hpd = platform_get_irq_byname(pdev, "hpd-removed");
-		if (hpd < 0)
-			return hpd;
+		if (hpd < 0) {
+			ret = hpd;
+			goto no_hpd_irq;
+		}
 
 		ret = devm_request_threaded_irq(&pdev->dev, hpd,
 						NULL,
 						vc4_hdmi_hpd_irq_thread, IRQF_ONESHOT,
 						"vc4 hdmi hpd disconnected", vc4_hdmi);
 		if (ret)
-			return ret;
+			goto no_hpd_irq;
 
 		connector->polled = DRM_CONNECTOR_POLL_HPD;
 	}
+
+	return 0;
+
+no_hpd_irq:
+	/*
+	 * DEVIATION (#51): losing the hotplug interrupt is not fatal.
+	 *
+	 * hdmi0's interrupt-parent is interrupt-controller@7d510600,
+	 * compatible "brcm,bcm2711-l2-intc", and FreeBSD has no driver for
+	 * that controller -- so every interrupt behind it fails to allocate
+	 * and the request comes back -ENXIO. Upstream propagates it and the
+	 * whole bind dies:
+	 *
+	 *	lkpi component: master bind failed: -6
+	 *
+	 * measured on a Pi 500+. Hotplug is a convenience; refusing to bring
+	 * up the display at all because a cable-detect line is unavailable is
+	 * not the right trade, so fall back to polling the connector, which is
+	 * a mode upstream already supports and which detect() serves from the
+	 * firmware EDID path.
+	 *
+	 * This is a REPORTED DEGRADATION, not a fix. The L2 interrupt
+	 * controller is still missing, and the same gap costs the HVS EOF
+	 * interrupts, which ARE vblank on gen6 -- see the sysctl and the
+	 * driver's own "irq 65535" lines. Plugging a monitor in after the
+	 * fact will be noticed a poll interval late, not immediately.
+	 */
+	drm_warn(connector->dev,
+	    "no hotplug interrupt (%d); polling the connector instead. The "
+	    "brcm,bcm2711-l2-intc driver is missing, so vblank is affected "
+	    "too (#51)\n", ret);
+	connector->polled = DRM_CONNECTOR_POLL_CONNECT |
+			    DRM_CONNECTOR_POLL_DISCONNECT;
 
 	return 0;
 }
@@ -3108,19 +3230,16 @@ static int vc4_hdmi_init_resources(struct drm_device *drm,
 	if (ret)
 		return ret;
 
-	vc4_hdmi->pixel_clock = devm_clk_get(dev, "pixel");
-	if (IS_ERR(vc4_hdmi->pixel_clock)) {
-		ret = PTR_ERR(vc4_hdmi->pixel_clock);
-		if (ret != -EPROBE_DEFER)
-			drm_err(drm, "Failed to get pixel clock\n");
-		return ret;
-	}
+		/*
+	 * DEVIATION (#51): clocks are OPTIONAL -- see the long note in
+	 * vc4_hvs.c. The bcm2712 device tree gives the hdmi nodes no "clocks"
+	 * property, the VideoCore firmware owns these clocks, and every clk_*
+	 * call this file makes (prepare_enable, disable_unprepare,
+	 * set_min_rate, set_rate, get_rate) tolerates NULL.
+	 */
+vc4_hdmi->pixel_clock = devm_clk_get_optional(dev, "pixel");
 
-	vc4_hdmi->hsm_clock = devm_clk_get(dev, "hdmi");
-	if (IS_ERR(vc4_hdmi->hsm_clock)) {
-		drm_err(drm, "Failed to get HDMI state machine clock\n");
-		return PTR_ERR(vc4_hdmi->hsm_clock);
-	}
+	vc4_hdmi->hsm_clock = devm_clk_get_optional(dev, "hdmi");
 	vc4_hdmi->audio_clock = vc4_hdmi->hsm_clock;
 	vc4_hdmi->cec_clock = vc4_hdmi->hsm_clock;
 
@@ -3200,35 +3319,37 @@ static int vc5_hdmi_init_resources(struct drm_device *drm,
 	if (!vc4_hdmi->rm_regs)
 		return -ENOMEM;
 
-	vc4_hdmi->hsm_clock = devm_clk_get(dev, "hdmi");
-	if (IS_ERR(vc4_hdmi->hsm_clock)) {
-		drm_err(drm, "Failed to get HDMI state machine clock\n");
-		return PTR_ERR(vc4_hdmi->hsm_clock);
-	}
+	vc4_hdmi->hsm_clock = devm_clk_get_optional(dev, "hdmi");
 
-	vc4_hdmi->pixel_bvb_clock = devm_clk_get(dev, "bvb");
-	if (IS_ERR(vc4_hdmi->pixel_bvb_clock)) {
-		drm_err(drm, "Failed to get pixel bvb clock\n");
-		return PTR_ERR(vc4_hdmi->pixel_bvb_clock);
-	}
+	vc4_hdmi->pixel_bvb_clock = devm_clk_get_optional(dev, "bvb");
 
-	vc4_hdmi->audio_clock = devm_clk_get(dev, "audio");
-	if (IS_ERR(vc4_hdmi->audio_clock)) {
-		drm_err(drm, "Failed to get audio clock\n");
-		return PTR_ERR(vc4_hdmi->audio_clock);
-	}
+	vc4_hdmi->audio_clock = devm_clk_get_optional(dev, "audio");
 
-	vc4_hdmi->cec_clock = devm_clk_get(dev, "cec");
-	if (IS_ERR(vc4_hdmi->cec_clock)) {
-		drm_err(drm, "Failed to get CEC clock\n");
-		return PTR_ERR(vc4_hdmi->cec_clock);
-	}
+	vc4_hdmi->cec_clock = devm_clk_get_optional(dev, "cec");
 
-	vc4_hdmi->reset = devm_reset_control_get(dev, NULL);
-	if (IS_ERR(vc4_hdmi->reset)) {
-		drm_err(drm, "Failed to get HDMI reset line\n");
-		return PTR_ERR(vc4_hdmi->reset);
-	}
+	/*
+	 * DEVIATION (#51): the reset is OPTIONAL.
+	 *
+	 * The device tree does give hdmi0 a reset -- resets = <&dvp 1> -- but
+	 * dvp has no FreeBSD reset-controller driver, so there is nothing to
+	 * ask. devm_reset_control_get() returns -ENOENT and upstream treats
+	 * that as fatal:
+	 *
+	 *	vc40: [drm] *ERROR* Failed to get HDMI reset line
+	 *	lkpi component: master bind failed: -2
+	 *
+	 * measured on a Pi 500+. graphics/include/linux/reset.h already
+	 * describes the intended behaviour -- "the driver skips the reset",
+	 * because on BCM2712 the firmware brings the HDMI block out of reset
+	 * before the OS runs -- and this is the call site that has to agree
+	 * with it. reset_control_reset(NULL) is already a no-op there.
+	 *
+	 * A part that genuinely needed an explicit reset would come up in an
+	 * undefined state. This one does not: the firmware has already
+	 * initialised it, which is the same reason firmware KMS can drive the
+	 * display without touching a reset controller.
+	 */
+	vc4_hdmi->reset = devm_reset_control_get_optional(dev, NULL);
 
 	ret = vc4_hdmi_build_regset(drm, vc4_hdmi, &vc4_hdmi->hdmi_regset, VC4_HDMI);
 	if (ret)
@@ -3339,7 +3460,9 @@ static void vc4_hdmi_put_ddc_device(void *ptr)
 {
 	struct vc4_hdmi *vc4_hdmi = ptr;
 
-	put_device(&vc4_hdmi->ddc->dev);
+	/* DEVIATION (#51): there may be no adapter -- see the probe path. */
+	if (vc4_hdmi->ddc != NULL)
+		put_device(&vc4_hdmi->ddc->dev);
 }
 
 static int vc4_hdmi_bind(struct device *dev, struct device *master, void *data)
@@ -3398,8 +3521,21 @@ static int vc4_hdmi_bind(struct device *dev, struct device *master, void *data)
 	vc4_hdmi->ddc = of_find_i2c_adapter_by_node(ddc_node);
 	of_node_put(ddc_node);
 	if (!vc4_hdmi->ddc) {
-		drm_dbg(drm, "Failed to get ddc i2c adapter by node\n");
-		return -EPROBE_DEFER;
+		/*
+		 * DEVIATION (#51): upstream returns -EPROBE_DEFER here, which
+		 * on this platform defers forever -- "brcm,brcmstb-i2c" has no
+		 * FreeBSD driver, so no adapter will ever appear and HDMI
+		 * would never probe.
+		 *
+		 * EDID comes from the firmware mailbox instead
+		 * (vc4_hdmi_read_edid above), which is the same source
+		 * firmware KMS uses on this hardware today. What is genuinely
+		 * lost is DDC/CI and SCDC: SCDC configures TMDS scrambling
+		 * above 340 MHz, so modes needing it are refused below rather
+		 * than driven wrongly.
+		 */
+		drm_info(drm,
+			 "no DDC i2c adapter; EDID will come from the firmware (#51)\n");
 	}
 
 	ret = devm_add_action_or_reset(dev, vc4_hdmi_put_ddc_device, vc4_hdmi);

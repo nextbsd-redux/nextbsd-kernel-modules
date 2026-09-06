@@ -319,6 +319,37 @@ static bool firmware_kms(void)
 	       "raspberrypi,rpi-firmware-kms-2711"));
 }
 
+/*
+ * DEVIATION (#51): the initial modeset is gated, and OFF by default.
+ *
+ * drm_fbdev_dma_setup() runs the first atomic commit, and that commit panics
+ * the machine on a Pi 500+:
+ *
+ *	far: 0x0000000000000140      <- NULL + 0x140, a read
+ *	esr: 0x0000000096000004      <- data abort, translation fault
+ *	elr: 0xffff000125adbaf0      <- inside vc4_kms.ko
+ *	panic: vm_fault failed: 0xffff000125adbaf0 error 1
+ *
+ * captured from a real core (savecore on a dedicated dump device). The two
+ * instructions in this module that read a NULL + 0x140 are both at the entry
+ * of a modeset callback -- vc4_hdmi_encoder_pre_crtc_configure() and
+ * vc4_hdmi_encoder_pre_crtc_enable() -- reading their first argument, the
+ * encoder. Nothing else runs at that point, which is why this gate exists here
+ * rather than somewhere further down.
+ *
+ * Default off so the driver can be loaded, bound and inspected at all; a
+ * kernel that panics on kextload cannot be developed against. Set
+ * compat.linuxkpi.vc4_kms.enable_fbdev=1 to reproduce.
+ *
+ * This is a DIAGNOSTIC DEFAULT, not a fix, and not the end state: with it off
+ * there is no fbdev console (extensions#55). The NULL encoder is a real bug
+ * and still has to be found.
+ */
+static int enable_fbdev;
+module_param(enable_fbdev, int, 0644);
+MODULE_PARM_DESC(enable_fbdev,
+    "Run fbdev emulation's initial modeset; currently panics on 2712 (#51)");
+
 static int vc4_drm_bind(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
@@ -443,7 +474,12 @@ static int vc4_drm_bind(struct device *dev)
 	if (ret < 0)
 		goto err;
 
-	drm_fbdev_dma_setup(drm, 16);
+	if (enable_fbdev)
+		drm_fbdev_dma_setup(drm, 16);
+	else
+		drm_info(drm, "fbdev emulation off; set "
+		    "compat.linuxkpi.vc4_kms.enable_fbdev=1 to run the initial "
+		    "modeset, which currently panics (#51)\n");
 
 	return 0;
 

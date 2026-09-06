@@ -2116,19 +2116,44 @@ static int vc4_hvs_bind(struct device *dev, struct device *master, void *data)
 		if (!firmware)
 			return -EPROBE_DEFER;
 
-		hvs->core_clk = devm_clk_get(&pdev->dev,
+	/*
+	 * DEVIATION (nextbsd-kernel-extensions#51): clocks are OPTIONAL here.
+	 *
+	 * The bcm2712 device tree gives these nodes no "clocks" property at all
+	 * -- hvs@107c580000 carries reg, interrupts, interrupt-names and iommus
+	 * and nothing else -- so devm_clk_get() cannot find one and upstream
+	 * fails the bind:
+	 *
+	 *	vc4_hvs0: Couldn't get core clock
+	 *	lkpi component: master bind failed: -19
+	 *
+	 * measured on a Pi 500+ with every component attached.
+	 *
+	 * On this SoC the VideoCore firmware owns the display clocks: it sets
+	 * them at boot and manages them thereafter, which is exactly why
+	 * firmware KMS drives a display without touching a clock provider. The
+	 * rate the driver would want to know is still available -- it asks the
+	 * mailbox through rpi_firmware_clk_get_max_rate() a few lines below.
+	 *
+	 * A NULL clk is safe for every call these drivers make on one:
+	 * clk_prepare_enable(), clk_disable_unprepare(), clk_set_min_rate(),
+	 * clk_set_rate() and clk_get_rate() all check for it in
+	 * graphics/include/linux/clk.h. Verified before relying on it, because
+	 * a NULL dereference here panics the board.
+	 *
+	 * What is lost: the driver cannot RAISE the core clock for a demanding
+	 * mode. If the firmware has it low, a high-bandwidth mode may be driven
+	 * underclocked rather than refused. Restore the hard failure the day
+	 * these nodes gain clocks and FreeBSD has a provider for them.
+	 */
+		hvs->core_clk = devm_clk_get_optional(&pdev->dev,
 					     (vc4->gen >= VC4_GEN_6_C) ? "core" : NULL);
-		if (IS_ERR(hvs->core_clk)) {
-			dev_err(&pdev->dev, "Couldn't get core clock\n");
-			return PTR_ERR(hvs->core_clk);
-		}
-
-		hvs->disp_clk = devm_clk_get(&pdev->dev,
+		hvs->disp_clk = devm_clk_get_optional(&pdev->dev,
 					     (vc4->gen >= VC4_GEN_6_C) ? "disp" : NULL);
-		if (IS_ERR(hvs->disp_clk)) {
-			dev_err(&pdev->dev, "Couldn't get disp clock\n");
-			return PTR_ERR(hvs->disp_clk);
-		}
+		if (hvs->core_clk == NULL || hvs->disp_clk == NULL)
+			drm_info(drm,
+			    "no core/disp clock in the device tree; the "
+			    "firmware manages them (#51)\n");
 
 		max_rate = rpi_firmware_clk_get_max_rate(firmware,
 							 RPI_FIRMWARE_CORE_CLK_ID);
