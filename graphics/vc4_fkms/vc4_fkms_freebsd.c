@@ -158,6 +158,17 @@ rpi_firmware_property_list(struct rpi_firmware *fw, void *data, size_t tag_size)
  * whole DRM stack in for one prototype, and this file is deliberately the
  * FreeBSD side of the module.
  */
+/*
+ * EXCLUDED from vc4_kms (#51). The full KMS module gets this from upstream's
+ * own vc4_drv.c, and compiling this file into it as well gave
+ *
+ *	ld.lld: error: duplicate symbol: vc4_ioremap_regs
+ *
+ * The rpi_firmware property interface above is what vc4_kms needs from this
+ * file, so the guard is around this one definition rather than the whole file.
+ * Firmware KMS does not define LKPI_NO_VC4_IOREMAP and is unaffected.
+ */
+#ifndef LKPI_NO_VC4_IOREMAP
 void __iomem *vc4_ioremap_regs(struct platform_device *pdev, int index);
 
 void __iomem *
@@ -166,6 +177,7 @@ vc4_ioremap_regs(struct platform_device *pdev, int index)
 
 	return (ERR_PTR(-ENODEV));
 }
+#endif /* LKPI_NO_VC4_IOREMAP */
 
 void
 rpi_firmware_put(struct rpi_firmware *fw)

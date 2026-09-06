@@ -175,6 +175,10 @@ CFLAGS+= -include ${.CURDIR:H}/lkpi/lkpi_drm.h
 # from sys/rman.h -- not LinuxKPI's identically named one from
 # <linux/ioport.h>, which the force-include above would otherwise give them.
 # One definition per translation unit; see the comment in lkpi_drm.h.
+# vc4_kms gets vc4_ioremap_regs() from upstream vc4_drv.c; the fkms copy of
+# it would be a duplicate symbol at link time.
+CFLAGS.vc4_fkms_freebsd.c+=	-DLKPI_NO_VC4_IOREMAP
+
 CFLAGS.lkpi_of.c+=		-DLKPI_NO_IOPORT
 CFLAGS.lkpi_platform.c+=	-DLKPI_NO_IOPORT
 CFLAGS.lkpi_irq.c+=		-DLKPI_NO_IOPORT
