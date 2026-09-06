@@ -136,7 +136,28 @@ struct platform_driver {
 	 * void, so this is a spelling difference rather than a behavioural one.
 	 */
 	void				(*remove_new)(struct platform_device *);
-	struct device_driver		driver;
+	/*
+	 * NOT struct device_driver. The kernel's copy has no of_match_table --
+	 * it used to, added by kernel patch 0040, and that patch is gone
+	 * because the same change inserted of_node into struct device
+	 * mid-struct and page-faulted i915kms on a Wyse 5070
+	 * (gershwin-desktop#49).
+	 *
+	 * A module cannot add the field back: struct device_driver is shared
+	 * with drm.ko, so a different layout on each side is an ABI mismatch
+	 * rather than isolation. Instead this carries its own type, private to
+	 * the module. Vendored drivers write
+	 *
+	 *	.driver = { .name = "...", .of_match_table = ... }
+	 *
+	 * unchanged -- a designated initialiser only needs the member names to
+	 * exist, and both do here.
+	 */
+	struct lkpi_driver {
+		const char			*name;
+		const struct of_device_id	*of_match_table;
+		void				*owner;
+	}				driver;
 };
 
 /*

@@ -74,6 +74,7 @@
 #define	LKPI_SYM2(p, n)	p ## n
 #define	LKPI_SYM1(p, n)	LKPI_SYM2(p, n)
 #define	LKPI_SYM(n)	LKPI_SYM1(LKPI_PFX, n)
+#define	lkpi_of_match_table	LKPI_SYM(lkpi_of_match_table)
 #define	dev_of_node	LKPI_SYM(dev_of_node)
 #define	lkpi_set_of_node	LKPI_SYM(lkpi_set_of_node)
 #define	lkpi_clear_of_node	LKPI_SYM(lkpi_clear_of_node)
@@ -169,7 +170,9 @@ int	of_dma_configure(struct device *dev, struct device_node *np,
  */
 struct device_node	*dev_of_node(struct device *dev);
 void			 lkpi_set_of_node(struct device *dev,
-			     struct device_node *node);
+			     struct device_node *node,
+			     const struct of_device_id *match);
+const struct of_device_id *lkpi_of_match_table(struct device *dev);
 void			 lkpi_clear_of_node(struct device *dev);
 
 #endif

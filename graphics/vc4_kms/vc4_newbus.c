@@ -53,10 +53,23 @@ vc4_newbus_attach(device_t dev, struct platform_driver *drv, const char *name)
 	sc->bsddev = dev;
 	sc->node.node = (intptr_t)ofw_bus_get_node(dev);
 
-	sc->pdev.dev.driver = &drv->driver;
+	/*
+	 * dev.driver is NOT set: struct platform_driver::driver is a
+	 * module-private type now (it carries of_match_table, which the
+	 * kernel's struct device_driver no longer does), so it is not a
+	 * struct device_driver *. Nothing reads dev->driver --
+	 * of_device_get_match_data() takes the table from the registry below.
+	 */
 	sc->pdev.name = name;
 	sc->pdev.dev.bsddev = dev;
-	sc->pdev.dev.of_node = &sc->node;
+	/*
+	 * See vc4_fkms_master.c: struct device no longer carries of_node, so
+	 * the device -> node mapping is module-private and dev_of_node() reads
+	 * it back. The driver's match table is registered with it, standing in
+	 * for the of_match_table struct device_driver no longer has.
+	 */
+	lkpi_set_of_node(&sc->pdev.dev, &sc->node,
+	    drv->driver.of_match_table);
 	sc->pdev.dev.parent = NULL;
 	INIT_LIST_HEAD(&sc->pdev.dev.devres_head);
 	spin_lock_init(&sc->pdev.dev.devres_lock);

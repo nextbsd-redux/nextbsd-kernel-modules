@@ -173,10 +173,24 @@ vc4_fkms_attach(device_t dev)
 	 * bsddev, and the devres list anything devm_* walks -- is both
 	 * necessary and sufficient.
 	 */
-	sc->pdev.dev.driver = &vc4_firmware_kms_driver.driver;
+	/*
+	 * dev.driver is NOT set: struct platform_driver::driver is now a
+	 * module-private type (it has to carry of_match_table, which the
+	 * kernel's struct device_driver no longer does), so it is not a
+	 * struct device_driver * and cannot be assigned here. Nothing reads
+	 * dev->driver -- of_device_get_match_data() takes the match table from
+	 * the registry below instead.
+	 */
 	sc->pdev.name = "vc4_firmware_kms";
 	sc->pdev.dev.bsddev = dev;
-	sc->pdev.dev.of_node = &sc->node;
+	/*
+	 * struct device has no of_node member any more -- kernel patch 0040
+	 * added one and inserting it mid-struct shifted every later field,
+	 * page-faulting i915kms on a Wyse 5070 (gershwin-desktop#49). The
+	 * mapping is module-private now; dev_of_node() reads it back.
+	 */
+	lkpi_set_of_node(&sc->pdev.dev, &sc->node,
+	    vc4_firmware_kms_driver.driver.of_match_table);
 	sc->pdev.dev.parent = NULL;
 	INIT_LIST_HEAD(&sc->pdev.dev.devres_head);
 	spin_lock_init(&sc->pdev.dev.devres_lock);

@@ -1950,7 +1950,7 @@ static int vc4_fkms_bind(struct device *dev, struct device *master, void *data)
 		return -ENODEV;
 	fkms->revision = (enum vc4_fkms_revision)match->data;
 
-	firmware_node = of_parse_phandle(dev->of_node, "brcm,firmware", 0);
+	firmware_node = of_parse_phandle(dev_of_node(dev), "brcm,firmware", 0);
 	vc4->firmware = devm_rpi_firmware_get(&pdev->dev, firmware_node);
 	if (!vc4->firmware) {
 		DRM_DEBUG("Failed to get Raspberry Pi firmware reference.\n");

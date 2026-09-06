@@ -62,11 +62,16 @@ of_match_device(const struct of_device_id *matches, const struct device *dev)
 #ifdef FDT
 	const struct of_device_id *m;
 
-	if (matches == NULL || dev == NULL || dev->of_node == NULL)
+	struct device_node *dn;
+
+	if (matches == NULL || dev == NULL)
+		return (NULL);
+	dn = dev_of_node(__DECONST(struct device *, dev));
+	if (dn == NULL)
 		return (NULL);
 
 	for (m = matches; m->compatible[0] != '\0'; m++) {
-		if (ofw_bus_node_is_compatible((phandle_t)dev->of_node->node,
+		if (ofw_bus_node_is_compatible((phandle_t)dn->node,
 		    m->compatible))
 			return (m);
 	}
@@ -282,9 +287,13 @@ of_device_get_match_data(const struct device *dev)
 #ifdef FDT
 	const struct of_device_id *id;
 
-	if (dev == NULL || dev->driver == NULL)
+	if (dev == NULL)
 		return (NULL);
-	id = of_match_device(dev->driver->of_match_table, dev);
+	/*
+	 * struct device has no ->driver->of_match_table any more; the shims
+	 * register the table alongside the node at attach.
+	 */
+	id = of_match_device(lkpi_of_match_table(__DECONST(struct device *, dev)), dev);
 	return (id != NULL ? id->data : NULL);
 #else
 	return (NULL);
@@ -398,9 +407,14 @@ lkpi_platform_get_irq_byname(struct platform_device *pdev, const char *name)
 	phandle_t node;
 	int i, len, off;
 
-	if (pdev == NULL || name == NULL || pdev->dev.of_node == NULL)
+	struct device_node *dn;
+
+	if (pdev == NULL || name == NULL)
 		return (-ENXIO);
-	node = (phandle_t)pdev->dev.of_node->node;
+	dn = dev_of_node(&pdev->dev);
+	if (dn == NULL)
+		return (-ENXIO);
+	node = (phandle_t)dn->node;
 	if (node == 0)
 		return (-ENXIO);
 
@@ -435,6 +449,7 @@ struct lkpi_of_ent {
 	TAILQ_ENTRY(lkpi_of_ent)	 link;
 	struct device			*dev;
 	struct device_node		*node;
+	const struct of_device_id	*match;
 };
 
 static TAILQ_HEAD(, lkpi_of_ent) lkpi_of_nodes =
@@ -443,7 +458,8 @@ static struct mtx lkpi_of_mtx;
 MTX_SYSINIT(lkpi_of_mtx, &lkpi_of_mtx, "lkpi-of-nodes", MTX_DEF);
 
 void
-lkpi_set_of_node(struct device *dev, struct device_node *node)
+lkpi_set_of_node(struct device *dev, struct device_node *node,
+    const struct of_device_id *match)
 {
 	struct lkpi_of_ent *e;
 
@@ -452,6 +468,7 @@ lkpi_set_of_node(struct device *dev, struct device_node *node)
 	e = malloc(sizeof(*e), M_DEVBUF, M_WAITOK | M_ZERO);
 	e->dev = dev;
 	e->node = node;
+	e->match = match;
 	mtx_lock(&lkpi_of_mtx);
 	TAILQ_INSERT_TAIL(&lkpi_of_nodes, e, link);
 	mtx_unlock(&lkpi_of_mtx);
@@ -491,4 +508,27 @@ dev_of_node(struct device *dev)
 	}
 	mtx_unlock(&lkpi_of_mtx);
 	return (n);
+}
+
+/*
+ * The match table the shim registered for this device, standing in for the
+ * of_match_table that struct device_driver no longer carries.
+ */
+const struct of_device_id *
+lkpi_of_match_table(struct device *dev)
+{
+	struct lkpi_of_ent *e;
+	const struct of_device_id *m = NULL;
+
+	if (dev == NULL)
+		return (NULL);
+	mtx_lock(&lkpi_of_mtx);
+	TAILQ_FOREACH(e, &lkpi_of_nodes, link) {
+		if (e->dev == dev) {
+			m = e->match;
+			break;
+		}
+	}
+	mtx_unlock(&lkpi_of_mtx);
+	return (m);
 }
