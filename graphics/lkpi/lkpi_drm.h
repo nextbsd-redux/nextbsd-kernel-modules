@@ -185,13 +185,23 @@ struct cec_msg {
 SYSCTL_DECL(_hw_vc4_kms);
 
 /*
- * <linux/ioport.h> for LinuxKPI's struct resource and resource_size().
- * vc4_hdmi uses them for its register banks. Note this is NOT FreeBSD's
- * struct resource from sys/rman.h -- the two are different types with the same
- * name, and mixing them is what broke the amdgpu build earlier
- * (nextbsd/nextbsd-kernel#200).
+ * <linux/ioport.h> for LinuxKPI's struct resource and resource_size(), which
+ * vc4_hdmi uses for its register banks.
+ *
+ * This is NOT FreeBSD's struct resource from sys/rman.h. They are different
+ * types with the same name, and putting one where the other is expected is
+ * what broke the entire amdgpu build in nextbsd/nextbsd-kernel#200 -- and then
+ * broke this module too, when adding the include here dragged the Linux
+ * definition into lkpi_of.c and lkpi_platform.c, which need FreeBSD's.
+ *
+ * Hence the guard. This header is force-included everywhere, so the few files
+ * that talk to newbus and busdma compile with -DLKPI_NO_IOPORT and keep the
+ * FreeBSD definition; everything else -- the vendored vc4 sources -- gets the
+ * Linux one. A translation unit gets exactly one of the two, never both.
  */
+#ifndef LKPI_NO_IOPORT
 #include <linux/ioport.h>
+#endif
 
 /*
  * No swiotlb on this platform, so no buffer is ever bounced through one and
@@ -203,6 +213,27 @@ swiotlb_find_pool(struct device *dev __unused, phys_addr_t paddr __unused)
 {
 
 	return (NULL);
+}
+
+/*
+ * Two CEC calls sit OUTSIDE vc4_hdmi.c's CONFIG_DRM_VC4_HDMI_CEC guards --
+ * they are in the hotplug and EDID paths, which run whether or not CEC is
+ * built. They tell a CEC adapter the physical address parsed from EDID.
+ *
+ * With no CEC adapter (see of_find_i2c_adapter_by_node in lkpi_of.c) there is
+ * nothing to tell, so these do nothing. Not stubs for something unimplemented:
+ * with CEC disabled, doing nothing is the correct behaviour.
+ */
+struct cec_adapter;
+static inline void
+cec_s_phys_addr(struct cec_adapter *adap __unused, uint16_t addr __unused,
+    bool block __unused)
+{
+}
+
+static inline void
+cec_phys_addr_invalidate(struct cec_adapter *adap __unused)
+{
 }
 
 struct mutex;

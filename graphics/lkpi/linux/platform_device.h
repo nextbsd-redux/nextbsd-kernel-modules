@@ -112,6 +112,7 @@
 #include <linux/kernel.h>
 #include <linux/device.h>
 #include <linux/errno.h>
+#include <linux/pm_runtime.h>
 
 struct platform_device {
 	const char			*name;
@@ -168,6 +169,11 @@ struct platform_driver {
 		const char			*name;
 		const struct of_device_id	*of_match_table;
 		void				*owner;
+		/*
+		 * Runtime PM callbacks. Assigned by vc4_hdmi and vc4_hvs;
+		 * never invoked, because nothing here suspends.
+		 */
+		const struct dev_pm_ops		*pm;
 	}				driver;
 };
 

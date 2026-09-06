@@ -628,3 +628,10 @@ of_find_i2c_adapter_by_node(struct device_node *np __unused)
 
 	return (NULL);
 }
+
+bool
+of_property_read_bool(const struct device_node *np, const char *name)
+{
+
+	return (of_find_property(np, name, NULL) != NULL);
+}

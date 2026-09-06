@@ -74,6 +74,7 @@
 #define	LKPI_SYM2(p, n)	p ## n
 #define	LKPI_SYM1(p, n)	LKPI_SYM2(p, n)
 #define	LKPI_SYM(n)	LKPI_SYM1(LKPI_PFX, n)
+#define	of_property_read_bool	LKPI_SYM(of_property_read_bool)
 #define	of_find_i2c_adapter_by_node	LKPI_SYM(of_find_i2c_adapter_by_node)
 #define	of_find_property	LKPI_SYM(of_find_property)
 #define	of_property_match_string	LKPI_SYM(of_property_match_string)
@@ -199,5 +200,9 @@ int	 of_property_match_string(const struct device_node *np,
  */
 struct i2c_adapter;
 struct i2c_adapter *of_find_i2c_adapter_by_node(struct device_node *np);
+
+
+/* Is the (valueless) property present? */
+bool	of_property_read_bool(const struct device_node *np, const char *name);
 
 #endif

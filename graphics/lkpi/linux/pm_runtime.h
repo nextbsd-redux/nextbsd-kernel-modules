@@ -85,4 +85,50 @@ pm_runtime_status_suspended(struct device *dev __unused)
 #define	pm_runtime_put_sync_suspend(x)	(void)(x)
 #endif
 
+
+/*
+ * The remainder of what vc4 calls. No runtime PM here, so every one succeeds
+ * and reports "running". pm_runtime_put() must RETURN an int -- vc4_hdmi.c
+ * assigns it and logs on a negative result -- which is why a void macro is not
+ * enough.
+ */
+static inline int
+pm_runtime_put(struct device *dev __unused)
+{
+
+	return (0);
+}
+
+static inline int
+pm_runtime_put_sync(struct device *dev __unused)
+{
+
+	return (0);
+}
+
+static inline int
+devm_pm_runtime_enable(struct device *dev __unused)
+{
+
+	return (0);
+}
+
+/*
+ * dev_pm_ops carries the callbacks; nothing here ever invokes them, because
+ * nothing suspends. The macro exists so the initialiser compiles with the
+ * function names still visible to a reader.
+ */
+#ifndef SET_RUNTIME_PM_OPS
+#define	SET_RUNTIME_PM_OPS(suspend_fn, resume_fn, idle_fn)		\
+	.runtime_suspend = (suspend_fn),				\
+	.runtime_resume = (resume_fn),					\
+	.runtime_idle = (idle_fn)
+#endif
+
+struct dev_pm_ops {
+	int	(*runtime_suspend)(struct device *);
+	int	(*runtime_resume)(struct device *);
+	int	(*runtime_idle)(struct device *);
+};
+
 #endif	/* _LINUXKPI_LINUX_PM_RUNTIME_H_ */

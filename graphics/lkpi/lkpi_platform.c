@@ -26,7 +26,6 @@
 
 #include <linux/device.h>
 #include <linux/platform_device.h>
-#include <linux/ioport.h>
 #include <linux/of.h>
 
 struct lkpi_pdev_ent {
@@ -113,66 +112,30 @@ platform_find_device_by_driver(struct device *start,
 }
 
 /*
- * platform_get_resource_byname() -- the register bank a device tree calls
- * `name` in its reg-names property.
+ * FreeBSD half of platform_get_resource_byname(): the address and length of
+ * the node's Nth reg entry, as plain integers.
  *
- * vc4_hdmi has eight of them (hdmi, hd, cec, csc, dvp, phy, packet, metadata)
- * and asks for each by name, so index-based lookup is not enough.
- *
- * The returned struct resource is LinuxKPI's, from <linux/ioport.h> -- start
- * and end, not FreeBSD's from sys/rman.h. The two are different types with the
- * same name; conflating them is what broke the amdgpu build in
- * nextbsd/nextbsd-kernel#200. This file does not include sys/rman.h for that
- * reason, and takes the address and length from newbus's resource list rather
- * than mapping anything itself.
- *
- * The resource is allocated once per lookup and never freed. Callers keep the
- * pointer for the life of the device and there are eight of them per HDMI
- * controller, so a free path would be more code than the leak is worth --
- * stated rather than hidden.
+ * Split deliberately. The Linux-facing function returns LinuxKPI's struct
+ * resource from <linux/ioport.h>, and this file needs FreeBSD's identically
+ * named one from sys/rman.h to call bus_get_resource(). A translation unit
+ * gets one or the other, never both -- conflating them is what broke the
+ * amdgpu build in nextbsd/nextbsd-kernel#200. So the halves live in different
+ * files and exchange integers.
  */
-struct resource *
-platform_get_resource_byname(struct platform_device *pdev, unsigned int type,
-    const char *name)
+int
+lkpi_of_reg_by_index(struct platform_device *pdev, int idx, uint64_t *startp,
+    uint64_t *lenp)
 {
-#ifdef FDT
-	struct device_node *dn;
-	struct resource *res;
 	rman_res_t start, count;
-	phandle_t node;
-	int idx;
 
-	if (pdev == NULL || name == NULL || pdev->dev.bsddev == NULL)
-		return (NULL);
-	if (type != IORESOURCE_MEM)
-		return (NULL);
-
-	dn = dev_of_node(&pdev->dev);
-	if (dn == NULL)
-		return (NULL);
-	node = (phandle_t)dn->node;
-	if (node == 0)
-		return (NULL);
-
-	idx = of_property_match_string(dn, "reg-names", name);
-	if (idx < 0)
-		return (NULL);
-
-	/*
-	 * newbus already parsed reg into a resource list when the node was
-	 * enumerated, and its rids are the reg indices, so the index from
-	 * reg-names selects the right entry directly.
-	 */
+	if (pdev == NULL || pdev->dev.bsddev == NULL || idx < 0)
+		return (-EINVAL);
 	if (bus_get_resource(pdev->dev.bsddev, SYS_RES_MEMORY, idx,
 	    &start, &count) != 0)
-		return (NULL);
-
-	res = malloc(sizeof(*res), M_DEVBUF, M_WAITOK | M_ZERO);
-	res->start = (resource_size_t)start;
-	res->end = (resource_size_t)(start + count - 1);
-	res->name = name;
-	return (res);
-#else
-	return (NULL);
-#endif
+		return (-ENOENT);
+	if (startp != NULL)
+		*startp = (uint64_t)start;
+	if (lenp != NULL)
+		*lenp = (uint64_t)count;
+	return (0);
 }

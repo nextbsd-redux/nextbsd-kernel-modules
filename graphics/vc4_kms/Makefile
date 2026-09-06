@@ -164,6 +164,14 @@ CFLAGS+= -DCONFIG_MMU=1
 # fkms byte-for-byte unaffected by this change.
 CFLAGS+= -include ${.CURDIR:H}/lkpi/lkpi_drm.h
 
+# These three talk to newbus and busdma, so they need FreeBSD's struct resource
+# from sys/rman.h -- not LinuxKPI's identically named one from
+# <linux/ioport.h>, which the force-include above would otherwise give them.
+# One definition per translation unit; see the comment in lkpi_drm.h.
+CFLAGS.lkpi_of.c+=	-DLKPI_NO_IOPORT
+CFLAGS.lkpi_platform.c+=	-DLKPI_NO_IOPORT
+CFLAGS.lkpi_irq.c+=	-DLKPI_NO_IOPORT
+
 CFLAGS+= -include ${.CURDIR:H}/include/kunit/test-bug.h
 
 # Same narrowing pattern as the fkms probe: of_device_id::data is a
