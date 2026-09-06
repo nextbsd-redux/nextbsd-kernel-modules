@@ -51,14 +51,32 @@
  * for free, because they include this header too.
  */
 
-#define	component_add	vc4lkpi_component_add
-#define	component_del	vc4lkpi_component_del
-#define	component_bind_all	vc4lkpi_component_bind_all
-#define	component_unbind_all	vc4lkpi_component_unbind_all
-#define	component_match_add	vc4lkpi_component_match_add
-#define	component_master_add_with_match	vc4lkpi_component_master_add_with_match
-#define	component_master_del	vc4lkpi_component_master_del
-#define	component_compare_dev	vc4lkpi_component_compare_dev
+
+/*
+ * Symbols are prefixed PER MODULE.
+ *
+ * Both vc4_fkms and vc4_kms compile this code, and both are built with
+ * EXPORT_SYMS=YES, so a fixed prefix would collide the moment the second one
+ * loaded. LKPI_PFX comes from each Makefile (-DLKPI_PFX=vc4kms_), so each
+ * module carries its own copy under its own names. They are also independent
+ * at runtime -- separate component lists, separate masters -- which is what we
+ * want: one driver's bind cannot disturb the other's.
+ */
+#ifndef LKPI_PFX
+#error "LKPI_PFX must be defined by the module Makefile"
+#endif
+#define	LKPI_SYM2(p, n)	p ## n
+#define	LKPI_SYM1(p, n)	LKPI_SYM2(p, n)
+#define	LKPI_SYM(n)	LKPI_SYM1(LKPI_PFX, n)
+
+#define	component_add	LKPI_SYM(component_add)
+#define	component_del	LKPI_SYM(component_del)
+#define	component_bind_all	LKPI_SYM(component_bind_all)
+#define	component_unbind_all	LKPI_SYM(component_unbind_all)
+#define	component_match_add	LKPI_SYM(component_match_add)
+#define	component_master_add_with_match	LKPI_SYM(component_master_add_with_match)
+#define	component_master_del	LKPI_SYM(component_master_del)
+#define	component_compare_dev	LKPI_SYM(component_compare_dev)
 #include <linux/device.h>
 
 struct component_ops {

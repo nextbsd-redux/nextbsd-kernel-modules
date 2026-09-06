@@ -57,9 +57,54 @@
  * for free, because they include this header too.
  */
 
-#define	lkpi_platform_get_irq	vc4lkpi_platform_get_irq
-#define	lkpi_platform_get_irq_byname	vc4lkpi_platform_get_irq_byname
-#define	lkpi_platform_ioremap_resource	vc4lkpi_platform_ioremap_resource
+/*
+ * Encoding for interrupts of a device on a bus LinuxKPI did not attach.
+ *
+ * The PCI path maps a Linux irq number back to a resource rid; off PCI there
+ * is no such mapping, so request_irq() uses rid 0 and a device can hold only
+ * one interrupt. bcm2712 needs more -- the HVS requests three named interrupts
+ * (ch0..2-eof) and HDMI four (hpd-connected, hpd-removed, cec-rx, cec-tx) --
+ * and vc4_hvs.c does not check the return, so a second request fails silently
+ * with every handler aliased to one line.
+ *
+ * platform_get_irq()/platform_get_irq_byname() therefore return the rid tagged
+ * with LKPI_IRQ_OF. The tag sits far above any real interrupt number, so an
+ * untagged value still means "dev->irq, rid 0".
+ *
+ * NOTE: consuming the tag requires request_irq() to honour it, which lives in
+ * the kernel's linux_interrupt.c. Until that is addressed module-side, a
+ * driver asking for a second interrupt gets a tagged rid the kernel's
+ * request_irq() will not understand -- so multi-IRQ is declared here but not
+ * yet functional end to end (#51).
+ */
+#ifndef LKPI_IRQ_OF_TAG
+#define	LKPI_IRQ_OF_TAG		0x40000000u
+#define	LKPI_IRQ_OF(rid)	(LKPI_IRQ_OF_TAG | (unsigned)(rid))
+#define	LKPI_IRQ_IS_OF(irq)	(((unsigned)(irq) & LKPI_IRQ_OF_TAG) != 0)
+#define	LKPI_IRQ_OF_RID(irq)	((int)((unsigned)(irq) & 0xffffu))
+#endif
+
+
+/*
+ * Symbols are prefixed PER MODULE.
+ *
+ * Both vc4_fkms and vc4_kms compile this code, and both are built with
+ * EXPORT_SYMS=YES, so a fixed prefix would collide the moment the second one
+ * loaded. LKPI_PFX comes from each Makefile (-DLKPI_PFX=vc4kms_), so each
+ * module carries its own copy under its own names. They are also independent
+ * at runtime -- separate component lists, separate masters -- which is what we
+ * want: one driver's bind cannot disturb the other's.
+ */
+#ifndef LKPI_PFX
+#error "LKPI_PFX must be defined by the module Makefile"
+#endif
+#define	LKPI_SYM2(p, n)	p ## n
+#define	LKPI_SYM1(p, n)	LKPI_SYM2(p, n)
+#define	LKPI_SYM(n)	LKPI_SYM1(LKPI_PFX, n)
+
+#define	lkpi_platform_get_irq	LKPI_SYM(lkpi_platform_get_irq)
+#define	lkpi_platform_get_irq_byname	LKPI_SYM(lkpi_platform_get_irq_byname)
+#define	lkpi_platform_ioremap_resource	LKPI_SYM(lkpi_platform_ioremap_resource)
 #include <linux/kernel.h>
 #include <linux/device.h>
 #include <linux/errno.h>

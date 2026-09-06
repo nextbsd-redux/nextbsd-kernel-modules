@@ -30,6 +30,9 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
+#include <sys/queue.h>
+#include <sys/mutex.h>
+#include <sys/lock.h>
 #include <sys/bus.h>
 #include <sys/rman.h>
 
@@ -419,4 +422,73 @@ lkpi_platform_get_irq_byname(struct platform_device *pdev, const char *name)
 #else
 	return (-ENXIO);
 #endif
+}
+
+/*
+ * struct device -> device_node, replacing the dev->of_node field that kernel
+ * patch 0040 used to add. See <linux/of.h> for why that field had to go.
+ *
+ * A vc4 pipeline is five devices, so a list is the right shape; entries are
+ * added from attach and removed from detach, neither of which is hot.
+ */
+struct lkpi_of_ent {
+	TAILQ_ENTRY(lkpi_of_ent)	 link;
+	struct device			*dev;
+	struct device_node		*node;
+};
+
+static TAILQ_HEAD(, lkpi_of_ent) lkpi_of_nodes =
+    TAILQ_HEAD_INITIALIZER(lkpi_of_nodes);
+static struct mtx lkpi_of_mtx;
+MTX_SYSINIT(lkpi_of_mtx, &lkpi_of_mtx, "lkpi-of-nodes", MTX_DEF);
+
+void
+lkpi_set_of_node(struct device *dev, struct device_node *node)
+{
+	struct lkpi_of_ent *e;
+
+	if (dev == NULL)
+		return;
+	e = malloc(sizeof(*e), M_DEVBUF, M_WAITOK | M_ZERO);
+	e->dev = dev;
+	e->node = node;
+	mtx_lock(&lkpi_of_mtx);
+	TAILQ_INSERT_TAIL(&lkpi_of_nodes, e, link);
+	mtx_unlock(&lkpi_of_mtx);
+}
+
+void
+lkpi_clear_of_node(struct device *dev)
+{
+	struct lkpi_of_ent *e, *tmp;
+
+	mtx_lock(&lkpi_of_mtx);
+	TAILQ_FOREACH_SAFE(e, &lkpi_of_nodes, link, tmp) {
+		if (e->dev != dev)
+			continue;
+		TAILQ_REMOVE(&lkpi_of_nodes, e, link);
+		mtx_unlock(&lkpi_of_mtx);
+		free(e, M_DEVBUF);
+		return;
+	}
+	mtx_unlock(&lkpi_of_mtx);
+}
+
+struct device_node *
+dev_of_node(struct device *dev)
+{
+	struct lkpi_of_ent *e;
+	struct device_node *n = NULL;
+
+	if (dev == NULL)
+		return (NULL);
+	mtx_lock(&lkpi_of_mtx);
+	TAILQ_FOREACH(e, &lkpi_of_nodes, link) {
+		if (e->dev == dev) {
+			n = e->node;
+			break;
+		}
+	}
+	mtx_unlock(&lkpi_of_mtx);
+	return (n);
 }

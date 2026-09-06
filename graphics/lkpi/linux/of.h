@@ -57,16 +57,37 @@
  * for free, because they include this header too.
  */
 
-#define	of_match_device	vc4lkpi_of_match_device
-#define	of_parse_phandle	vc4lkpi_of_parse_phandle
-#define	of_node_put	vc4lkpi_of_node_put
-#define	of_node_get	vc4lkpi_of_node_get
-#define	of_find_compatible_node	vc4lkpi_of_find_compatible_node
-#define	of_find_matching_node_and_match	vc4lkpi_of_find_matching_node_and_match
-#define	of_device_is_available	vc4lkpi_of_device_is_available
-#define	of_device_is_compatible	vc4lkpi_of_device_is_compatible
-#define	of_device_get_match_data	vc4lkpi_of_device_get_match_data
-#define	of_dma_configure	vc4lkpi_of_dma_configure
+
+/*
+ * Symbols are prefixed PER MODULE.
+ *
+ * Both vc4_fkms and vc4_kms compile this code, and both are built with
+ * EXPORT_SYMS=YES, so a fixed prefix would collide the moment the second one
+ * loaded. LKPI_PFX comes from each Makefile (-DLKPI_PFX=vc4kms_), so each
+ * module carries its own copy under its own names. They are also independent
+ * at runtime -- separate component lists, separate masters -- which is what we
+ * want: one driver's bind cannot disturb the other's.
+ */
+#ifndef LKPI_PFX
+#error "LKPI_PFX must be defined by the module Makefile"
+#endif
+#define	LKPI_SYM2(p, n)	p ## n
+#define	LKPI_SYM1(p, n)	LKPI_SYM2(p, n)
+#define	LKPI_SYM(n)	LKPI_SYM1(LKPI_PFX, n)
+#define	dev_of_node	LKPI_SYM(dev_of_node)
+#define	lkpi_set_of_node	LKPI_SYM(lkpi_set_of_node)
+#define	lkpi_clear_of_node	LKPI_SYM(lkpi_clear_of_node)
+
+#define	of_match_device	LKPI_SYM(of_match_device)
+#define	of_parse_phandle	LKPI_SYM(of_parse_phandle)
+#define	of_node_put	LKPI_SYM(of_node_put)
+#define	of_node_get	LKPI_SYM(of_node_get)
+#define	of_find_compatible_node	LKPI_SYM(of_find_compatible_node)
+#define	of_find_matching_node_and_match	LKPI_SYM(of_find_matching_node_and_match)
+#define	of_device_is_available	LKPI_SYM(of_device_is_available)
+#define	of_device_is_compatible	LKPI_SYM(of_device_is_compatible)
+#define	of_device_get_match_data	LKPI_SYM(of_device_get_match_data)
+#define	of_dma_configure	LKPI_SYM(of_dma_configure)
 #include <linux/kobject.h>
 #include <linux/types.h>
 
@@ -124,5 +145,31 @@ bool	of_device_is_compatible(const struct device_node *np, const char *compat);
  */
 int	of_dma_configure(struct device *dev, struct device_node *np,
 	    bool force_dma);
+
+
+/*
+ * dev_of_node() -- the device-tree node a device came from.
+ *
+ * Upstream Linux keeps this in struct device as dev->of_node, and we used to
+ * do the same: kernel patch 0040 inserted the field into LinuxKPI's struct
+ * device. That was a mistake with real consequences. The insert was
+ * mid-struct, so devt, class, release, kobj, dma_priv and irq all shifted by
+ * eight bytes -- and because struct pci_dev embeds struct device first, every
+ * pci_dev member shifted too. Any module built before the change read its
+ * fields eight bytes low. A Dell Wyse 5070 page-faulted in device_attach()
+ * loading i915kms with a kernel 22 hours newer than its kexts
+ * (gershwin-desktop#49). Nothing about that failure involved vc4.
+ *
+ * So the field is gone from the kernel and the mapping lives here instead,
+ * private to this module. dev_of_node() IS a real upstream accessor
+ * (include/linux/device.h), so vendored sources using it rather than the bare
+ * field is idiomatic, not a deviation.
+ *
+ * The table is tiny and set up at attach: a vc4 pipeline is five devices.
+ */
+struct device_node	*dev_of_node(struct device *dev);
+void			 lkpi_set_of_node(struct device *dev,
+			     struct device_node *node);
+void			 lkpi_clear_of_node(struct device *dev);
 
 #endif

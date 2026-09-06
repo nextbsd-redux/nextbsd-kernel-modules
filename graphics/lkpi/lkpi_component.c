@@ -131,7 +131,6 @@ component_del(struct device *dev, const struct component_ops *ops)
  * A component that fails is left unbound and the error is returned
  * immediately, which matches Linux -- the master is expected to tear down.
  */
-int
 /*
  * Find the master registered for this device, if it has one, so bind order can
  * follow its match list. Caller must hold nothing; the master list is only

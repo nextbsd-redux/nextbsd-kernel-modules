@@ -102,6 +102,22 @@ CLEANFILES+= ${KMOD}.ko.full ${KMOD}.ko.debug
 #
 # This -I MUST stay first. If it falls below the kernel's include path the
 # module silently builds against the kernel's smaller KPI instead.
+# PRIVATE LinuxKPI, ahead of drm-kmod's and the kernel's.
+#
+# ../lkpi/linux/*.h shadow the kernel's copies for objects compiled into THIS
+# module only. i915, amdgpu and radeonkms are built in the drm-kmod tree and
+# never see this path, so nothing here can reach them -- which is the point.
+# These additions used to be kernel patches against
+# sys/compat/linuxkpi/common/include, where one of them collided with
+# LinuxKPI's struct resource and broke the whole amdgpu build.
+#
+# LKPI_PFX makes the symbols unique per module, since several modules compile
+# this code and all export their symbols.
+#
+# This -I MUST stay first, or the module silently builds against the kernel's
+# smaller KPI instead.
+CFLAGS+= -I${.CURDIR:H}/lkpi -DLKPI_PFX=${KMOD}_
+
 CFLAGS+= -I${.CURDIR}/lkpi
 
 CFLAGS+= -I${.CURDIR:H}/linuxkpi/gplv2/include
