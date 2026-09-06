@@ -32,18 +32,22 @@ KMOD=	vc4_fkms
 
 EXPORT_SYMS=	YES
 
-# Implementations behind the private LinuxKPI headers below. Required, not
-# optional: those headers #define component_add() and friends onto
-# ${KMOD}_-prefixed symbols, so without these the module builds and then fails
-# to link against names nothing defines.
-SRCS+=	\
-	lkpi_component.c \
-	lkpi_of.c
-
 SRCS=	\
 	vc4_firmware_kms.c \
 	vc4_fkms_freebsd.c \
 	vc4_fkms_master.c
+
+# Implementations behind the private LinuxKPI headers further down. Required,
+# not optional: those headers #define component_add() and friends onto
+# per-module prefixed symbols, so without these the module builds and then
+# fails kldload with ENOEXEC on names nothing defines.
+#
+# MUST come after the SRCS= assignment above -- a SRCS+= placed before it is
+# silently discarded when SRCS= runs, which is exactly how this shipped
+# 8 unresolved symbols.
+SRCS+=	\
+	lkpi_component.c \
+	lkpi_of.c
 
 SRCS	+=			\
 	opt_acpi.h		\
