@@ -119,11 +119,21 @@ static driver_t vc4_master_newbus_driver = {
 };
 
 /*
- * BUS_PASS_SUPPORTDEV so the master attaches after the buses its components
- * live on have enumerated. It does not need to attach after the components
- * themselves -- an incomplete match list simply waits.
+ * The master attaches LAST, in the default pass, after every component has
+ * attached in BUS_PASS_SUPPORTDEV.
+ *
+ * This ordering is required, and the comment that used to sit here had it
+ * exactly backwards. It claimed "an incomplete match list simply waits" and
+ * put the master in an EARLIER pass than its components. It does not wait: the
+ * master builds the match list at probe from the platform-device registry, and
+ * a list built before the components attached is empty. An empty match list is
+ * COMPLETE, so the master binds immediately with zero components, registers a
+ * drm_device with no CRTCs and reports success -- a dark screen with nothing
+ * in the log.
+ *
+ * Newbus runs passes in order and completes each before starting the next, so
+ * putting the components in SUPPORTDEV and the master in the default pass is
+ * what actually guarantees the list is populated.
  */
-EARLY_DRIVER_MODULE(vc4, simplebus, vc4_master_newbus_driver, 0, 0,
-    BUS_PASS_SUPPORTDEV);
-EARLY_DRIVER_MODULE(vc4_ofwbus, ofwbus, vc4_master_newbus_driver, 0, 0,
-    BUS_PASS_SUPPORTDEV);
+DRIVER_MODULE(vc4, simplebus, vc4_master_newbus_driver, 0, 0);
+DRIVER_MODULE(vc4_ofwbus, ofwbus, vc4_master_newbus_driver, 0, 0);
