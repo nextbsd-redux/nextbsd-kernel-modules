@@ -180,3 +180,18 @@ MODULE_DEPEND(vc4_kms, drmn, 2, 2, 2);
 MODULE_DEPEND(vc4_kms, drm_dma_helpers, 1, 1, 1);
 MODULE_DEPEND(vc4_kms, drm_extra_helpers, 1, 1, 1);
 MODULE_DEPEND(vc4_kms, linuxkpi, 1, 1, 1);
+/*
+ * dmabuf, which vc4_fkms does NOT declare and does not need.
+ *
+ * vc4_crtc.c's async page flip calls dma_resv_get_singleton() on the
+ * non-GEN_4 path, to get one fence to wait on before flipping. DMABuf.kext
+ * exports it -- verified, the installed binary is byte-identical to the built
+ * one -- but having it loaded is not enough, because MODULE_DEPEND is depth-1
+ * and the linker searches only declared edges:
+ *
+ *	link_elf: symbol dma_resv_get_singleton undefined
+ *
+ * measured on a Pi 500+ with DMABuf resident and exporting the symbol. Same
+ * trap the drm_extra_helpers comment above describes, one module further out.
+ */
+MODULE_DEPEND(vc4_kms, dmabuf, 1, 1, 1);
