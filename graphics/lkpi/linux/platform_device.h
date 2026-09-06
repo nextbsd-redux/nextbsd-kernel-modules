@@ -140,6 +140,13 @@ struct platform_driver {
 	 */
 	void				(*remove_new)(struct platform_device *);
 	/*
+	 * Called at shutdown/reboot. vc4_drv.c assigns it; nothing invokes it
+	 * here, because newbus device_shutdown is not wired to this glue. The
+	 * member exists so the initialiser compiles and so wiring it later is a
+	 * one-line change rather than a struct change.
+	 */
+	void				(*shutdown)(struct platform_device *);
+	/*
 	 * NOT struct device_driver. The kernel's copy has no of_match_table --
 	 * it used to, added by kernel patch 0040, and that patch is gone
 	 * because the same change inserted of_node into struct device

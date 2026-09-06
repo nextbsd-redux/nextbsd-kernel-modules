@@ -563,13 +563,13 @@ int vc4_crtc_disable_at_boot(struct drm_crtc *crtc)
 	int channel;
 	int ret;
 
-	if (!(of_device_is_compatible(vc4_crtc->pdev->dev.of_node,
+	if (!(of_device_is_compatible(dev_of_node(&vc4_crtc->pdev->dev),
 				      "brcm,bcm2711-pixelvalve2") ||
-	      of_device_is_compatible(vc4_crtc->pdev->dev.of_node,
+	      of_device_is_compatible(dev_of_node(&vc4_crtc->pdev->dev),
 				      "brcm,bcm2711-pixelvalve4") ||
-	      of_device_is_compatible(vc4_crtc->pdev->dev.of_node,
+	      of_device_is_compatible(dev_of_node(&vc4_crtc->pdev->dev),
 				      "brcm,bcm2712-pixelvalve0") ||
-	      of_device_is_compatible(vc4_crtc->pdev->dev.of_node,
+	      of_device_is_compatible(dev_of_node(&vc4_crtc->pdev->dev),
 				      "brcm,bcm2712-pixelvalve1")))
 		return 0;
 

@@ -40,6 +40,7 @@
 
 #include <linux/device.h>
 #include <linux/interrupt.h>
+#include <linux/platform_device.h>	/* LKPI_IRQ_OF* */
 #include <linux/errno.h>
 
 struct lkpi_of_irq {

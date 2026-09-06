@@ -331,7 +331,14 @@ static int vc4_drm_bind(struct device *dev)
 	enum vc4_gen gen;
 	int ret = 0;
 
-	dev->coherent_dma_mask = DMA_BIT_MASK(32);
+	/*
+	 * DEVIATION (#51): LinuxKPI's struct device has no coherent_dma_mask,
+	 * and the mask is not set from here in any case -- the newbus shim
+	 * calls linux_dma_priv_init() at attach, which builds the busdma tags
+	 * this device actually allocates through. The
+	 * dma_set_mask_and_coherent() calls below still run and still widen it
+	 * to 36 bits on gen6.
+	 */
 
 	gen = (enum vc4_gen)of_device_get_match_data(dev);
 

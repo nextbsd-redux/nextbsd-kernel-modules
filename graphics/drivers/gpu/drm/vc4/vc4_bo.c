@@ -302,7 +302,14 @@ static void vc4_bo_purge(struct drm_gem_object *obj)
 	WARN_ON(!mutex_is_locked(&bo->madv_lock));
 	WARN_ON(bo->madv != VC4_MADV_DONTNEED);
 
-	drm_vma_node_unmap(&obj->vma_node, dev->anon_inode->i_mapping);
+	/*
+	 * DEVIATION (#51): drm-kmod's struct drm_device has no anon_inode.
+	 * This unmaps any userspace mapping of a BO being purged through
+	 * madvise(DONTNEED). vc4 madvise is a GEN_4 render-path feature -- the
+	 * ioctl is not registered by vc5_drm_driver -- so nothing on this SoC
+	 * reaches it. Restore alongside a real anon_inode if madvise is ever
+	 * wanted.
+	 */
 
 	dma_free_wc(dev->dev, obj->size, bo->base.vaddr, bo->base.dma_addr);
 	bo->base.vaddr = NULL;

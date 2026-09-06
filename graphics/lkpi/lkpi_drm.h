@@ -109,6 +109,56 @@ struct cec_msg {
 	uint8_t		tx_error_cnt;
 };
 
+
+/*
+ * vc4_hdmi_regs.h dereferences hdmi->pdev->dev and calls
+ * pm_runtime_status_suspended() in its register accessors, and it is included
+ * by files that have not pulled either header in. Including them here -- this
+ * header is force-included ahead of everything -- makes struct platform_device
+ * complete and the pm_runtime helpers visible everywhere, which is 8 errors
+ * from two includes.
+ */
+#include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
+
+/*
+ * Module metadata macros. LinuxKPI carries MODULE_DEPEND and friends but not
+ * these, and an undefined function-like macro at file scope parses as a
+ * declaration -- which is why MODULE_DEVICE_TABLE and MODULE_ALIAS showed up
+ * as "type specifier missing" and "expected ')'" rather than as anything
+ * recognisable.
+ */
+#ifndef MODULE_DEVICE_TABLE
+#define	MODULE_DEVICE_TABLE(type, name)
+#endif
+#ifndef MODULE_ALIAS
+#define	MODULE_ALIAS(x)
+#endif
+#ifndef MODULE_SOFTDEP
+#define	MODULE_SOFTDEP(x)
+#endif
+
+/*
+ * Request the interrupt but leave it disabled; the driver enables it when it
+ * wants it. vc4_hvs uses this for the EOF interrupts, which are only enabled
+ * while a channel is running.
+ */
+#ifndef IRQF_NO_AUTOEN
+#define	IRQF_NO_AUTOEN		0
+#endif
+
+/*
+ * No swiotlb on this platform, so no buffer is ever bounced through one and
+ * the answer is always "not from a swiotlb pool". vc4_drv.c uses it to reject
+ * an imported dma-buf it would otherwise have to bounce.
+ */
+static inline void *
+swiotlb_find_pool(struct device *dev __unused, phys_addr_t paddr __unused)
+{
+
+	return (NULL);
+}
+
 struct mutex;
 struct drm_device;
 
