@@ -270,7 +270,15 @@ static void vc4_match_add_drivers(struct device *dev,
 	int i;
 
 	for (i = 0; i < count; i++) {
-		struct device_driver *drv = &drivers[i]->driver;
+		/*
+		 * DEVIATION (#51): struct lkpi_driver, not struct
+		 * device_driver. The kernel's device_driver has no
+		 * of_match_table and is shared with drm.ko, so a module cannot
+		 * add one; struct platform_driver carries its own type here
+		 * instead. Same member names, so every initialiser below is
+		 * unchanged.
+		 */
+		const struct lkpi_driver *drv = &drivers[i]->driver;
 		struct device *p = NULL, *d;
 
 		while ((d = platform_find_device_by_driver(p, drv))) {
@@ -323,7 +331,14 @@ static int vc4_drm_bind(struct device *dev)
 	enum vc4_gen gen;
 	int ret = 0;
 
-	dev->coherent_dma_mask = DMA_BIT_MASK(32);
+	/*
+	 * DEVIATION (#51): LinuxKPI's struct device has no coherent_dma_mask,
+	 * and the mask is not set from here in any case -- the newbus shim
+	 * calls linux_dma_priv_init() at attach, which builds the busdma tags
+	 * this device actually allocates through. The
+	 * dma_set_mask_and_coherent() calls below still run and still widen it
+	 * to 36 bits on gen6.
+	 */
 
 	gen = (enum vc4_gen)of_device_get_match_data(dev);
 

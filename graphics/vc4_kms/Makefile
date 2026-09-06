@@ -42,9 +42,7 @@ SRCS=	\
 	vc4_plane.c \
 	vc4_hdmi.c \
 	vc4_hdmi_phy.c \
-	vc4_bo.c \
-	vc4_gem.c \
-	vc4_fence.c
+	vc4_bo.c
 
 # The newbus shims. LinuxKPI has no platform bus, so each vendored block is
 # attached to its device-tree node by a newbus driver that calls the vendored
@@ -55,7 +53,16 @@ SRCS=	\
 SRCS+=	\
 	lkpi_component.c \
 	lkpi_of.c \
-	lkpi_drm.c
+	lkpi_drm.c \
+	lkpi_platform.c \
+	lkpi_irq.c
+
+# The GEN_4 render path is not built -- vc5_drm_driver registers no ioctls and
+# no DRIVER_RENDER, so vc4_gem.c/vc4_fence.c and the v3d, validate, render_cl
+# and perfmon sources are unreachable on 2712. These stand in for the symbols
+# vc4_drv.c still names in that unreachable ioctl table.
+SRCS+=	\
+	vc4_gen4_render_stubs.c
 
 SRCS+=	\
 	vc4_newbus.c \
@@ -156,6 +163,19 @@ CFLAGS+= -DCONFIG_MMU=1
 # vc4_kms ONLY. vc4_fkms does not use either symbol, and leaving it out keeps
 # fkms byte-for-byte unaffected by this change.
 CFLAGS+= -include ${.CURDIR:H}/lkpi/lkpi_drm.h
+
+# These three talk to newbus and busdma, so they need FreeBSD's struct resource
+# from sys/rman.h -- not LinuxKPI's identically named one from
+# <linux/ioport.h>, which the force-include above would otherwise give them.
+# One definition per translation unit; see the comment in lkpi_drm.h.
+CFLAGS.lkpi_of.c+=		-DLKPI_NO_IOPORT
+CFLAGS.lkpi_platform.c+=	-DLKPI_NO_IOPORT
+CFLAGS.lkpi_irq.c+=		-DLKPI_NO_IOPORT
+CFLAGS.vc4_newbus.c+=		-DLKPI_NO_IOPORT
+CFLAGS.vc4_hvs_newbus.c+=	-DLKPI_NO_IOPORT
+CFLAGS.vc4_crtc_newbus.c+=	-DLKPI_NO_IOPORT
+CFLAGS.vc4_hdmi_newbus.c+=	-DLKPI_NO_IOPORT
+CFLAGS.vc4_master_newbus.c+=	-DLKPI_NO_IOPORT
 
 CFLAGS+= -include ${.CURDIR:H}/include/kunit/test-bug.h
 

@@ -24,7 +24,28 @@
 struct snd_soc_component;
 struct snd_soc_dai;
 struct snd_soc_pcm_runtime;
-struct snd_soc_jack;
+/*
+ * Completed rather than forward-declared (#51): vc4_hdmi embeds these BY VALUE
+ * -- struct vc4_hdmi_audio has three dai_link_components and struct vc4_hdmi
+ * has an snd_soc_jack -- so an incomplete type makes those structs
+ * incomplete and takes every user of them with it.
+ *
+ * The members are the ones vc4 names. Nothing reads them: HDMI audio is not
+ * wired up here, and these exist so the display half compiles. Sizes need not
+ * match Linux, because no ALSA core on this system ever sees one.
+ */
+/*
+ * struct snd_soc_jack lives in <sound/jack.h>. Included rather than
+ * re-declared: the inlines below take one by pointer, and a bare forward
+ * declaration inside a prototype is scoped to that prototype
+ * ("declaration will not be visible outside of this function").
+ */
+#include <sound/jack.h>
+struct snd_soc_dai_link_component {
+	const char		*name;
+	struct device_node	*of_node;
+	const char		*dai_name;
+};
 struct snd_pcm_substream;
 
 struct snd_soc_dai_ops {

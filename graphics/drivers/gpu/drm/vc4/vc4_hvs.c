@@ -2078,7 +2078,14 @@ static int vc4_hvs_bind(struct device *dev, struct device *master, void *data)
 	if (IS_ERR(hvs))
 		return PTR_ERR(hvs);
 
-	hvs->regset.base = hvs->regs;
+	/*
+	 * DEVIATION (#51): LinuxKPI's struct debugfs_regset32 has only regs and
+	 * nregs -- no base -- and there is no debugfs_create_regset32() at all,
+	 * so nothing ever reads this. Adding the member would mean shadowing
+	 * <linux/debugfs.h>, which drm core also includes; the rule from
+	 * earlier in #51 is to shadow only headers whose consumers are all
+	 * inside this module. Dropping a write nothing reads costs nothing.
+	 */
 
 	if (vc4->gen == VC4_GEN_6_C) {
 		hvs->regset.regs = vc6_hvs_regs;

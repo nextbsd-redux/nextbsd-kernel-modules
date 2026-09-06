@@ -354,6 +354,26 @@ component_master_add_with_match(struct device *master,
 	if (master == NULL || ops == NULL)
 		return (-EINVAL);
 
+	/*
+	 * An empty match list is COMPLETE, so the master would bind
+	 * immediately with zero components, register a drm_device with nothing
+	 * attached, and report success -- a dark screen and a clean log. That
+	 * is the single most misleading failure this framework can produce, and
+	 * it has already been reached once by attaching the master in an
+	 * earlier newbus pass than its components (#51).
+	 *
+	 * A driver that genuinely wants no components calls
+	 * component_master_add() and never gets here, so an empty list arriving
+	 * on this path always means the caller expected to find some. Say so
+	 * loudly rather than binding an empty aggregate.
+	 */
+	if (match == NULL || match->count == 0) {
+		printf("lkpi: %s: component master registered with an EMPTY "
+		    "match list -- no components will bind. Attach order or "
+		    "the platform-device registry is wrong (#51).\n",
+		    dev_name(master) != NULL ? dev_name(master) : "?");
+	}
+
 	m = malloc(sizeof(*m), M_DEVBUF, M_NOWAIT | M_ZERO);
 	if (m == NULL)
 		return (-ENOMEM);

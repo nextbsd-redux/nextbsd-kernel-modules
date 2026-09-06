@@ -70,6 +70,15 @@ vc4_newbus_attach(device_t dev, struct platform_driver *drv, const char *name)
 	 */
 	lkpi_set_of_node(&sc->pdev.dev, &sc->node,
 	    drv->driver.of_match_table);
+
+	/*
+	 * Register with the platform-device registry, which is what
+	 * platform_find_device_by_driver() enumerates when the master builds
+	 * its component match list. Without this the list comes back empty --
+	 * and an empty match list is complete, so the master would bind with
+	 * zero components and report success (#51).
+	 */
+	lkpi_platform_device_register(&sc->pdev, &drv->driver);
 	sc->pdev.dev.parent = NULL;
 	INIT_LIST_HEAD(&sc->pdev.dev.devres_head);
 	spin_lock_init(&sc->pdev.dev.devres_lock);
@@ -156,5 +165,13 @@ vc4_newbus_detach(device_t dev, struct platform_driver *drv)
 		drv->remove_new(&sc->pdev);
 	else if (drv->remove != NULL)
 		drv->remove(&sc->pdev);
+
+	/*
+	 * Out of the registry only after the driver's remove has run, so a
+	 * master unbinding concurrently still finds a live device rather than
+	 * a half-torn-down one.
+	 */
+	lkpi_platform_device_unregister(&sc->pdev);
+	lkpi_clear_of_node(&sc->pdev.dev);
 	return (0);
 }

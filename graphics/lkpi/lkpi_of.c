@@ -532,3 +532,106 @@ lkpi_of_match_table(struct device *dev)
 	mtx_unlock(&lkpi_of_mtx);
 	return (m);
 }
+
+/*
+ * of_find_property() -- vc4_hdmi uses it only to ask whether a property
+ * exists ("dmas"), never to read the value back, so returning a non-NULL
+ * sentinel for "present" is enough and avoids inventing a struct property
+ * whose contents nothing reads.
+ */
+struct property *
+of_find_property(const struct device_node *np, const char *name, int *lenp)
+{
+#ifdef FDT
+	static int present;		/* address used as a sentinel */
+	phandle_t node;
+	ssize_t len;
+
+	if (np == NULL || name == NULL)
+		return (NULL);
+	node = (phandle_t)np->node;
+	if (node == 0)
+		return (NULL);
+	len = OF_getproplen(node, name);
+	if (len < 0)
+		return (NULL);
+	if (lenp != NULL)
+		*lenp = (int)len;
+	return ((struct property *)&present);
+#else
+	return (NULL);
+#endif
+}
+
+/*
+ * Index of `string` within a string-list property, or -ENODATA. The property
+ * is a sequence of NUL-terminated strings, the same shape interrupt-names has.
+ */
+int
+of_property_match_string(const struct device_node *np, const char *propname,
+    const char *string)
+{
+#ifdef FDT
+	char *vals;
+	phandle_t node;
+	int i, len, off;
+
+	if (np == NULL || propname == NULL || string == NULL)
+		return (-EINVAL);
+	node = (phandle_t)np->node;
+	if (node == 0)
+		return (-EINVAL);
+
+	len = OF_getprop_alloc(node, propname, (void **)&vals);
+	if (len <= 0)
+		return (-ENODATA);
+
+	for (i = 0, off = 0; off < len; i++) {
+		if (strcmp(&vals[off], string) == 0) {
+			OF_prop_free(vals);
+			return (i);
+		}
+		off += strlen(&vals[off]) + 1;
+	}
+	OF_prop_free(vals);
+	return (-ENODATA);
+#else
+	return (-ENODATA);
+#endif
+}
+
+/*
+ * of_find_i2c_adapter_by_node() -- the I2C adapter behind a device-tree node.
+ *
+ * Returns NULL, and that is a REAL LIMITATION rather than a stub standing in
+ * for something easy.
+ *
+ * vc4_hdmi uses this for DDC, the I2C channel EDID is read over. On bcm2712
+ * the node is ddc0/ddc1 at 0x7d508200, compatible "brcm,brcmstb-i2c" -- a
+ * Broadcom STB controller, not the bcm2835 BSC that FreeBSD has a driver for.
+ * There is no FreeBSD driver for it: the tree carries the device-tree binding
+ * document and nothing else.
+ *
+ * So vc4_hdmi_bind() takes its -EPROBE_DEFER path and HDMI does not come up.
+ * Writing a brcmstb-i2c driver, or teaching vc4_hdmi to take EDID from the
+ * firmware the way vc4_firmware_kms does, is a prerequisite for a picture --
+ * and it is why firmware KMS works today without any of this: the firmware
+ * reads EDID itself and vc4_firmware_kms never touches DDC.
+ *
+ * Returning NULL rather than a fake adapter is deliberate. vc4_hdmi checks the
+ * result and defers cleanly; a non-NULL adapter that cannot transfer would
+ * fail later, further from the cause, as a display with no modes.
+ */
+struct i2c_adapter *
+of_find_i2c_adapter_by_node(struct device_node *np __unused)
+{
+
+	return (NULL);
+}
+
+bool
+of_property_read_bool(const struct device_node *np, const char *name)
+{
+
+	return (of_find_property(np, name, NULL) != NULL);
+}

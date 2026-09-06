@@ -7,6 +7,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/malloc.h>
 
 #include <linux/mutex.h>
 #include <linux/dma-fence.h>
@@ -15,6 +16,10 @@
 
 #include <drm/drm_device.h>
 #include <drm/drm_managed.h>
+
+#include <linux/ioport.h>
+#include <linux/platform_device.h>
+#include <linux/of.h>
 
 #include "lkpi_drm.h"
 
@@ -69,4 +74,44 @@ dma_fence_match_context(struct dma_fence *fence, u64 context)
 			return (false);
 	}
 	return (true);
+}
+
+/*
+ * Linux half of platform_get_resource_byname(): the register bank a device
+ * tree calls `name` in reg-names. vc4_hdmi has eight and asks for each by
+ * name, so index lookup is not enough.
+ *
+ * Here rather than in lkpi_platform.c because the return type is LinuxKPI's
+ * struct resource; that file needs FreeBSD's to call bus_get_resource(), and a
+ * translation unit gets one or the other. The two halves exchange integers.
+ *
+ * The resource is allocated per lookup and never freed: callers keep it for
+ * the life of the device and there are eight per controller, so a free path
+ * would be more code than the leak is worth. Stated, not hidden.
+ */
+struct resource *
+platform_get_resource_byname(struct platform_device *pdev, unsigned int type,
+    const char *name)
+{
+	struct device_node *dn;
+	struct resource *res;
+	uint64_t start, len;
+	int idx;
+
+	if (pdev == NULL || name == NULL || type != IORESOURCE_MEM)
+		return (NULL);
+	dn = dev_of_node(&pdev->dev);
+	if (dn == NULL)
+		return (NULL);
+	idx = of_property_match_string(dn, "reg-names", name);
+	if (idx < 0)
+		return (NULL);
+	if (lkpi_of_reg_by_index(pdev, idx, &start, &len) != 0)
+		return (NULL);
+
+	res = malloc(sizeof(*res), M_DEVBUF, M_WAITOK | M_ZERO);
+	res->start = (resource_size_t)start;
+	res->end = (resource_size_t)(start + len - 1);
+	res->name = name;
+	return (res);
 }

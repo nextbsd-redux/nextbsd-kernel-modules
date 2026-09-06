@@ -563,13 +563,13 @@ int vc4_crtc_disable_at_boot(struct drm_crtc *crtc)
 	int channel;
 	int ret;
 
-	if (!(of_device_is_compatible(vc4_crtc->pdev->dev.of_node,
+	if (!(of_device_is_compatible(dev_of_node(&vc4_crtc->pdev->dev),
 				      "brcm,bcm2711-pixelvalve2") ||
-	      of_device_is_compatible(vc4_crtc->pdev->dev.of_node,
+	      of_device_is_compatible(dev_of_node(&vc4_crtc->pdev->dev),
 				      "brcm,bcm2711-pixelvalve4") ||
-	      of_device_is_compatible(vc4_crtc->pdev->dev.of_node,
+	      of_device_is_compatible(dev_of_node(&vc4_crtc->pdev->dev),
 				      "brcm,bcm2712-pixelvalve0") ||
-	      of_device_is_compatible(vc4_crtc->pdev->dev.of_node,
+	      of_device_is_compatible(dev_of_node(&vc4_crtc->pdev->dev),
 				      "brcm,bcm2712-pixelvalve1")))
 		return 0;
 
@@ -1505,7 +1505,10 @@ static int vc4_crtc_bind(struct device *dev, struct device *master, void *data)
 	if (IS_ERR(vc4_crtc->regs))
 		return PTR_ERR(vc4_crtc->regs);
 
-	vc4_crtc->regset.base = vc4_crtc->regs;
+	/*
+	 * DEVIATION (#51): see the note in vc4_hvs.c -- struct
+	 * debugfs_regset32 has no base member here and nothing reads it.
+	 */
 	vc4_crtc->regset.regs = crtc_regs;
 	vc4_crtc->regset.nregs = ARRAY_SIZE(crtc_regs);
 

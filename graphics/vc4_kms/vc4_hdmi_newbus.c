@@ -59,5 +59,22 @@ static driver_t vc4_hdmi_newbus_driver = {
 	sizeof(struct vc4_newbus_softc),
 };
 
-DRIVER_MODULE(vc4_hdmi, simplebus, vc4_hdmi_newbus_driver, 0, 0);
-DRIVER_MODULE(vc4_hdmi_ofwbus, ofwbus, vc4_hdmi_newbus_driver, 0, 0);
+/*
+ * BUS_PASS_SUPPORTDEV, EARLIER than the master (#51).
+ *
+ * The master builds its component match list at probe by asking the
+ * platform-device registry which devices are bound to each driver in
+ * component_drivers[]. A component that has not attached yet is not in that
+ * registry and does not make the list.
+ *
+ * That is not a "binds later" situation. An empty or short match list is
+ * COMPLETE by definition, so the master binds immediately with whatever it
+ * found -- possibly nothing -- registers a drm_device with no CRTCs, and
+ * reports success. The screen stays dark and nothing logs an error.
+ *
+ * So every component attaches in an earlier newbus pass than the master.
+ */
+EARLY_DRIVER_MODULE(vc4_hdmi, simplebus, vc4_hdmi_newbus_driver, 0, 0,
+    BUS_PASS_SUPPORTDEV);
+EARLY_DRIVER_MODULE(vc4_hdmi_ofwbus, ofwbus, vc4_hdmi_newbus_driver, 0, 0,
+    BUS_PASS_SUPPORTDEV);

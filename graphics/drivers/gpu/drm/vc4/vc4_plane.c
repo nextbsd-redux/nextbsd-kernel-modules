@@ -903,7 +903,14 @@ static size_t vc6_upm_size(const struct drm_plane_state *state,
 
 	if (base_format_mod == DRM_FORMAT_MOD_BROADCOM_SAND128) {
 		if (state->fb->format->format == DRM_FORMAT_P030)
-			stride = (ALIGN(state->fb->width, 96) * 4) / 3;
+			/*
+			 * DEVIATION (#51): roundup(), not ALIGN(). 96 is not
+			 * a power of two and LinuxKPI's ALIGN() is roundup2(),
+			 * which requires one -- "requested alignment is not a
+			 * power of 2". roundup() is the general form and gives
+			 * the same answer Linux's ALIGN() does here.
+			 */
+			stride = (roundup(state->fb->width, 96) * 4) / 3;
 		else
 			stride = ALIGN(state->fb->width, 128);
 	}
