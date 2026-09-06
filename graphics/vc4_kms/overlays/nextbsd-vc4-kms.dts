@@ -1,0 +1,86 @@
+/*
+ * Enable the full VC4 KMS display pipeline on BCM2712
+ * (nextbsd-kernel-extensions#51).
+ *
+ * bcm2712 ships every one of these disabled, so they enumerate as
+ * "(no driver attached)" with "disabled" in the newbus line and are never
+ * probed. The full KMS port needs all of them:
+ *
+ *	ofwbus0:    <hvs@107c580000>   irq 5,6,7
+ *	simplebus0: <pixelvalve@7c410000> irq 23
+ *	simplebus0: <pixelvalve@7c411000> irq 24
+ *	simplebus0: <hdmi@7ef00700>    irq 32,33,34,35,36
+ *	simplebus0: <hdmi@7ef05700>    irq 37,38,39,40,41
+ *	simplebus1: <gpu>              (the vc6 master)
+ *	simplebus0: <i2c@7d508200>     irq 28   (ddc0)
+ *
+ * NOT the same thing as nextbsd-fkms. That enables the firmware-KMS node,
+ * where the VideoCore firmware owns modesetting and the driver asks it over a
+ * mailbox -- and on 2712 the firmware refuses SET_PLANE (#48), which is why
+ * that path has no hardware cursor. This enables the real blocks so a driver
+ * can program the HVS and pixelvalves directly.
+ *
+ * MUTUALLY EXCLUSIVE WITH nextbsd-fkms at the DRIVER level. Both drive the
+ * same display hardware, so only one of vc4_fkms and vc4_kms may be loaded.
+ * Having both overlays applied is harmless in itself -- measured on a Pi 500+,
+ * with all seven nodes enabled and only firmware KMS loaded, fb0 still came up
+ * and vc4_fkms0 still attached with /dev/dri/card0 -- because nothing binds
+ * the newly enabled nodes. It stops being harmless the moment vc4_kms.ko is
+ * installed.
+ *
+ * The master matches via its fallback compatible: the node carries
+ * "brcm,bcm2712d0-vc6" first and "brcm,bcm2712-vc6" second, and the vendored
+ * vc4_drv.c match table names the latter.
+ *
+ * ddc0 is enabled because vc4_hdmi reads EDID over it and returns
+ * -EPROBE_DEFER without an adapter. NECESSARY BUT NOT SUFFICIENT:
+ * "brcm,brcmstb-i2c" has no FreeBSD driver, so HDMI will still defer until one
+ * exists or vc4_hdmi is taught to take EDID from the firmware.
+ *
+ * mop/moplet (TXP, the writeback connector) are deliberately left disabled --
+ * component_drivers[] in this port carries only hvs, hdmi and crtc.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2712";
+
+	/* The master. */
+	fragment@0 {
+		target = <&vc4>;
+		__overlay__ { status = "okay"; };
+	};
+
+	/* HVS -- three interrupts (ch0/1/2-eof), which ARE vblank on gen6. */
+	fragment@1 {
+		target = <&hvs>;
+		__overlay__ { status = "okay"; };
+	};
+
+	/* The two pixelvalves: the CRTCs. */
+	fragment@2 {
+		target = <&pixelvalve0>;
+		__overlay__ { status = "okay"; };
+	};
+	fragment@3 {
+		target = <&pixelvalve1>;
+		__overlay__ { status = "okay"; };
+	};
+
+	/* Both HDMI controllers -- five interrupts each. */
+	fragment@4 {
+		target = <&hdmi0>;
+		__overlay__ { status = "okay"; };
+	};
+	fragment@5 {
+		target = <&hdmi1>;
+		__overlay__ { status = "okay"; };
+	};
+
+	/* DDC for EDID. See the note above: no driver for it yet. */
+	fragment@6 {
+		target = <&ddc0>;
+		__overlay__ { status = "okay"; };
+	};
+};
