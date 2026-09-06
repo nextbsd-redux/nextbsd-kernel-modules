@@ -26,7 +26,7 @@
 
 SRCDIR=	${.CURDIR:H}/drivers/gpu/drm/vc4
 
-.PATH:	${SRCDIR} ${.CURDIR}
+.PATH:	${SRCDIR} ${.CURDIR} ${.CURDIR:H}/lkpi
 
 KMOD=	vc4_fkms
 
@@ -36,6 +36,18 @@ SRCS=	\
 	vc4_firmware_kms.c \
 	vc4_fkms_freebsd.c \
 	vc4_fkms_master.c
+
+# Implementations behind the private LinuxKPI headers further down. Required,
+# not optional: those headers #define component_add() and friends onto
+# per-module prefixed symbols, so without these the module builds and then
+# fails kldload with ENOEXEC on names nothing defines.
+#
+# MUST come after the SRCS= assignment above -- a SRCS+= placed before it is
+# silently discarded when SRCS= runs, which is exactly how this shipped
+# 8 unresolved symbols.
+SRCS+=	\
+	lkpi_component.c \
+	lkpi_of.c
 
 SRCS	+=			\
 	opt_acpi.h		\
@@ -50,8 +62,15 @@ SRCS	+=			\
 	device_if.h		\
 	pci_if.h		\
 	ofw_bus_if.h		\
-	vnode_if.h
+	vnode_if.h		\
+	clknode_if.h
 
+# clknode_if.h is GENERATED from dev/clk/clknode_if.m. linux/clk.h is a real
+# implementation over clk(9) as of #51, and it includes dev/clk/clk.h which
+# includes this -- so every module including linux/clk.h needs it generated,
+# even one that (like this driver) never calls a clk_* function. Without it the
+# build dies at the #include, which is how it was found: adding the clk shim
+# for the full KMS port broke THIS module's build.
 CLEANFILES+= ${KMOD}.ko.full ${KMOD}.ko.debug
 
 .include <bsd.kmod.mk>
@@ -59,6 +78,22 @@ CLEANFILES+= ${KMOD}.ko.full ${KMOD}.ko.debug
 # Included after <bsd.kmod.mk> because they expand variables it defines.
 .include "../linuxkpi_version.mk"
 .include "../compiler_flags.mk"
+
+# PRIVATE LinuxKPI, ahead of drm-kmod's and the kernel's.
+#
+# ../lkpi/linux/*.h shadow the kernel's copies for objects compiled into THIS
+# module only. i915, amdgpu and radeonkms are built in the drm-kmod tree and
+# never see this path, so nothing here can reach them -- which is the point.
+# These additions used to be kernel patches against
+# sys/compat/linuxkpi/common/include, where one of them collided with
+# LinuxKPI's struct resource and broke the whole amdgpu build.
+#
+# LKPI_PFX makes the symbols unique per module, since several modules compile
+# this code and all export their symbols.
+#
+# This -I MUST stay first, or the module silently builds against the kernel's
+# smaller KPI instead.
+CFLAGS+= -I${.CURDIR:H}/lkpi -DLKPI_PFX=${KMOD}_
 
 CFLAGS+= -I${.CURDIR:H}/linuxkpi/gplv2/include
 CFLAGS+= -I${.CURDIR:H}/linuxkpi/bsd/include

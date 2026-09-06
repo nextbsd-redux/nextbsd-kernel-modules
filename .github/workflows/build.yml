@@ -691,6 +691,12 @@ jobs:
           # vc4_drv.h does #include "uapi/drm/vc4_drm.h"; drm-kmod ships uapi
           # headers for the drivers it carries and vc4 is not one of them.
           cp nbkm-tools/graphics/include/uapi/drm/*.h   /tmp/drm-kmod/include/uapi/drm/
+          # graphics/lkpi is the private LinuxKPI shared by the vc4 modules.
+          # Their Makefiles add -I${.CURDIR:H}/lkpi, and graphics/ is copied
+          # FLAT into /tmp/drm-kmod, so that resolves to /tmp/drm-kmod/lkpi --
+          # it has to be copied too. The build uses -Werror,-Wmissing-include-dirs,
+          # so a missing -I is a hard error, not a warning.
+          [ -d /tmp/drm-kmod/lkpi ] || cp -R nbkm-tools/graphics/lkpi /tmp/drm-kmod/
           cp -R nbkm-tools/graphics/vc4_fkms /tmp/drm-kmod/
           NPROC=$(nproc)
           cd /usr/src
@@ -703,6 +709,91 @@ jobs:
           # the symbol-resolution check runs over it -- that is the closest
           # thing to a load test we get before hardware.
           cp /tmp/drm-kmod/vc4_fkms/vc4_fkms.ko /tmp/ko-out/ 2>/dev/null || true
+
+      - name: Build vc4_kms.ko (full KMS display pipeline, #51)
+        # Still continue-on-error: the port is incomplete and this is expected
+        # to fail for now. The gap summary below is what makes the failure
+        # useful -- it reports what is still missing rather than just a red X.
+        #
+        # Flip this to a hard failure once it links, so a regression is caught
+        # instead of being absorbed by continue-on-error.
+        if: matrix.target == 'arm64'
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p /tmp/drm-kmod/drivers/gpu/drm/vc4 /tmp/drm-kmod/include/soc/bcm2835 \
+                   /tmp/drm-kmod/include/uapi/drm /tmp/drm-kmod/include/kunit \
+                   /tmp/drm-kmod/include/linux/gpio /tmp/drm-kmod/include/sound
+          cp nbkm-tools/graphics/drivers/gpu/drm/vc4/*   /tmp/drm-kmod/drivers/gpu/drm/vc4/
+          cp nbkm-tools/graphics/include/linux/*.h       /tmp/drm-kmod/include/linux/
+          cp nbkm-tools/graphics/include/soc/bcm2835/*.h /tmp/drm-kmod/include/soc/bcm2835/
+          cp nbkm-tools/graphics/include/uapi/drm/*.h    /tmp/drm-kmod/include/uapi/drm/
+          # New subdirectories for #51: the glob above is linux/*.h only, so
+          # these would silently not arrive and the files would keep aborting.
+          cp nbkm-tools/graphics/include/kunit/*.h       /tmp/drm-kmod/include/kunit/
+          cp nbkm-tools/graphics/include/linux/gpio/*.h  /tmp/drm-kmod/include/linux/gpio/
+          cp nbkm-tools/graphics/include/sound/*.h       /tmp/drm-kmod/include/sound/
+          cp nbkm-tools/graphics/include/drm/*.h         /tmp/drm-kmod/include/drm/ 2>/dev/null || true
+          # graphics/lkpi is the private LinuxKPI shared by the vc4 modules.
+          # Their Makefiles add -I${.CURDIR:H}/lkpi, and graphics/ is copied
+          # FLAT into /tmp/drm-kmod, so that resolves to /tmp/drm-kmod/lkpi --
+          # it has to be copied too. The build uses -Werror,-Wmissing-include-dirs,
+          # so a missing -I is a hard error, not a warning.
+          [ -d /tmp/drm-kmod/lkpi ] || cp -R nbkm-tools/graphics/lkpi /tmp/drm-kmod/
+          cp -R nbkm-tools/graphics/vc4_kms /tmp/drm-kmod/
+          NPROC=$(nproc)
+          cd /usr/src
+          ./tools/build/make.py \
+            --cross-bindir="${CROSS_BINDIR}" \
+            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=NEXTBSD \
+            buildenv BUILDENV_SHELL="make -k -C /tmp/drm-kmod/vc4_kms -j${NPROC} SYSDIR=/usr/src/sys" \
+            > /tmp/vc4kms-probe.log 2>&1
+          echo "build exit: $?"
+          exit 0
+
+      - name: PROBE vc4_kms gap summary (#51)
+        if: matrix.target == 'arm64'
+        continue-on-error: true
+        run: |
+          set +e
+          L=/tmp/vc4kms-probe.log
+          [ -f "$L" ] || { echo "no probe log"; exit 0; }
+          echo "=== did it LINK? (the real question now the shims exist)"
+          ls -l /tmp/drm-kmod/vc4_kms/vc4_kms.ko 2>/dev/null \
+            && echo "    *** vc4_kms.ko BUILT ***" \
+            || echo "    no vc4_kms.ko -- still incomplete, gaps below"
+          echo
+          echo "===================== TOTALS ====================="
+          printf "  errors:            %s\n" "$(grep -c 'error:' $L)"
+          printf "  missing headers:   %s\n" "$(grep -c 'file not found' $L)"
+          printf "  implicit decls:    %s\n" "$(grep -c 'call to undeclared function' $L)"
+          printf "  incomplete types:  %s\n" "$(grep -c 'incomplete type' $L)"
+          printf "  no member named:   %s\n" "$(grep -c 'no member named' $L)"
+          echo
+          echo "============== MISSING HEADERS (unique) =============="
+          grep -o \"'[^']*' file not found\" $L | sort -u | head -40
+          echo
+          echo "======== UNDECLARED FUNCTIONS (unique, the real surface) ========"
+          grep -o "call to undeclared function '[^']*'" $L | sed "s/.*'\(.*\)'/\1/" | sort -u | head -80
+          echo
+          echo "============== NO MEMBER NAMED (unique) =============="
+          grep -o "no member named '[^']*' in '[^']*'" $L | sort -u | head -40
+          echo
+          echo "===== COVERAGE: .o targets attempted (must be all 10) ====="
+          grep -o "^--- [a-z0-9_]*\.o ---" $L | sort -u
+          echo
+          echo "============== FIRST 60 RAW ERRORS =============="
+          grep 'error:' $L | head -60
+          exit 0
+
+      - name: Upload vc4_kms probe log (#51)
+        if: matrix.target == 'arm64'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: vc4-kms-probe-log
+          path: /tmp/vc4kms-probe.log
+          if-no-files-found: ignore
 
       # A dedicated upload, because "Upload drm-kmod modules artifact" runs
       # several steps earlier -- before this module is built -- so copying into
@@ -1087,7 +1178,6 @@ jobs:
             "$K" -o "$O" -l org.nextbsd.kext.iographics -l org.nextbsd.kext.dmabuf \
                  -l org.nextbsd.kext.iographicsdma \
                  -l org.nextbsd.kext.iographicsextras \
-                 -p nbkm-tools/graphics/vc4_fkms/VideoCoreKMS.iokitpersonalities \
                  "$KO/vc4_fkms.ko" VideoCoreKMS org.nextbsd.kext.videocorekms
           fi
           if [ -f "$KO/virtio_gpu_drm.ko" ] && [ -f pers/VirtIOGraphics.iokitpersonalities ]; then
@@ -1550,23 +1640,6 @@ jobs:
               tar -C "artifacts/nextbsd-modules-$arch" -czf "out/nextbsd-modules-$arch.tar.gz" .
             fi
           done
-          # rpi5-overlays.tar.gz: device-tree overlays that must land on the
-          # Pi's FAT32 firmware partition, which no package can write -- pkg(8)
-          # installs into the UFS root and that partition is not mounted at
-          # install time. So the image build stages them, and gets them from
-          # here (nextbsd/nextbsd#429).
-          #
-          # Shipped from this repo rather than the image repo so an overlay
-          # stays versioned with the driver it enables: the two have to agree
-          # about the node's compatible string, and splitting them invites
-          # drift.
-          if [ -d graphics/vc4_fkms/overlays ]; then
-            tar -C graphics/vc4_fkms/overlays -czf out/rpi5-overlays.tar.gz .
-            echo "==> rpi5-overlays.tar.gz:"
-            tar tzf out/rpi5-overlays.tar.gz
-          else
-            echo "WARNING: no overlays dir; rpi5 image will ship without them" >&2
-          fi
           ls -lh out/
 
       # Build the SHIPPED IntelWiFi.kext (amd64) with the FULL Intel iwlwifi
