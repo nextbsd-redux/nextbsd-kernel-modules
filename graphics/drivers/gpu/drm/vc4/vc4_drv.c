@@ -460,16 +460,29 @@ static const struct component_master_ops vc4_drm_ops = {
  *     lookup the HVS maximum core clock rate and figure out if we
  *     support 4kp60 or not.
  */
+/*
+ * DEVIATION (nextbsd-kernel-extensions#51). Upstream lists nine drivers here;
+ * this build carries the four that can match on bcm2712.
+ *
+ * vc4_vec (composite), vc4_dpi (parallel) and vc4_dsi have no bcm2712
+ * compatible in their match tables at all, so they can never bind on this SoC.
+ * vc4_v3d is the GEN_4 render engine -- on vc6 the 3D core is driven by the
+ * separate drm/v3d driver, not from here. vc4_txp matches mop/moplet, which do
+ * exist on 2712, but it provides the writeback connector, which HDMI output
+ * does not depend on; it can be added back when writeback is wanted.
+ * vc4_firmware_kms belongs to the firmware KMS module, which is a separate
+ * kmod and a different master.
+ *
+ * Order matters and is preserved: this array is the master's match list, and
+ * component_bind_all() binds in match-list order (nextbsd-kernel#199). The
+ * HDMI encoders MUST be registered before the pixelvalves, or
+ * vc4_set_crtc_possible_masks() leaves possible_crtcs == 0 on every encoder
+ * and no modeset can succeed.
+ */
 static struct platform_driver *const component_drivers[] = {
 	&vc4_hvs_driver,
 	&vc4_hdmi_driver,
-	&vc4_vec_driver,
-	&vc4_dpi_driver,
-	&vc4_dsi_driver,
-	&vc4_txp_driver,
 	&vc4_crtc_driver,
-	&vc4_firmware_kms_driver,
-	&vc4_v3d_driver,
 };
 
 static int vc4_platform_drm_probe(struct platform_device *pdev)
