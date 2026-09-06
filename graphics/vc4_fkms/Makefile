@@ -47,7 +47,9 @@ SRCS=	\
 # 8 unresolved symbols.
 SRCS+=	\
 	lkpi_component.c \
-	lkpi_of.c
+	lkpi_of.c \
+	lkpi_irq.c \
+	lkpi_platform.c
 
 SRCS	+=			\
 	opt_acpi.h		\
@@ -94,6 +96,14 @@ CLEANFILES+= ${KMOD}.ko.full ${KMOD}.ko.debug
 # This -I MUST stay first, or the module silently builds against the kernel's
 # smaller KPI instead.
 CFLAGS+= -I${.CURDIR:H}/lkpi -DLKPI_PFX=${KMOD}_
+
+# Files that call newbus or busdma need FreeBSD's struct resource from
+# sys/rman.h, not LinuxKPI's identically named one. fkms does not force-include
+# lkpi_drm.h, so only the shared lkpi sources need saying -- but say it, because
+# forgetting one file is how this broke three times in #51.
+CFLAGS.lkpi_of.c+=		-DLKPI_NO_IOPORT
+CFLAGS.lkpi_platform.c+=	-DLKPI_NO_IOPORT
+CFLAGS.lkpi_irq.c+=		-DLKPI_NO_IOPORT
 
 CFLAGS+= -I${.CURDIR:H}/linuxkpi/gplv2/include
 CFLAGS+= -I${.CURDIR:H}/linuxkpi/bsd/include
