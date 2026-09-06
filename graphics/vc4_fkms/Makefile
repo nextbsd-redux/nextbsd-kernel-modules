@@ -50,8 +50,15 @@ SRCS	+=			\
 	device_if.h		\
 	pci_if.h		\
 	ofw_bus_if.h		\
-	vnode_if.h
+	vnode_if.h		\
+	clknode_if.h
 
+# clknode_if.h is GENERATED from dev/clk/clknode_if.m. linux/clk.h is a real
+# implementation over clk(9) as of #51, and it includes dev/clk/clk.h which
+# includes this -- so every module including linux/clk.h needs it generated,
+# even one that (like this driver) never calls a clk_* function. Without it the
+# build dies at the #include, which is how it was found: adding the clk shim
+# for the full KMS port broke THIS module's build.
 CLEANFILES+= ${KMOD}.ko.full ${KMOD}.ko.debug
 
 .include <bsd.kmod.mk>
