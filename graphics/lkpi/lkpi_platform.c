@@ -23,6 +23,11 @@
 #include <sys/lock.h>
 #include <sys/mutex.h>
 #include <sys/queue.h>
+#include <sys/bus.h>
+#include <sys/rman.h>
+
+#include <machine/bus.h>
+#include <machine/resource.h>	/* SYS_RES_MEMORY */
 
 #include <linux/device.h>
 #include <linux/platform_device.h>
