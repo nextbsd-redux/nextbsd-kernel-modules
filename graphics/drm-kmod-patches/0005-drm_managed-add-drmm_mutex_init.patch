@@ -1,0 +1,80 @@
+drm_managed: add drmm_mutex_init()
+
+A mutex destroyed when the drm_device is. The point of the drmm_ family is
+that a driver need not unwind by hand -- everything registered is released in
+reverse order when the device goes -- and vc4 uses this for locks whose
+lifetime is exactly the device's.
+
+Needed by the full vc4 KMS port (nextbsd-kernel-extensions#51).
+
+Ordering matters here: the mutex is initialised BEFORE the release action is
+registered, and destroyed again if that registration fails. The other order
+leaves an initialised mutex live with nothing arranged to destroy it.
+
+diff --git a/drivers/gpu/drm/drm_managed.c b/drivers/gpu/drm/drm_managed.c
+index 609eb20..5660674 100644
+--- a/drivers/gpu/drm/drm_managed.c
++++ b/drivers/gpu/drm/drm_managed.c
+@@ -4,6 +4,7 @@
+ #include <linux/slab.h>
+ #include <linux/string.h>
+ #include <linux/list.h>
++#include <linux/mutex.h>	/* drmm_mutex_init (#51) */
+ 
+ #include <drm/drm_device.h>
+ #include <drm/drm_managed.h>
+@@ -158,3 +159,37 @@ drmm_add_final_kfree(struct drm_device *dev, void *p)
+ {
+ 	dev->managed.final_kfree = p;
+ }
++
++/*
++ * drmm_mutex_init() -- a mutex destroyed when the drm_device is
++ * (nextbsd-kernel-extensions#51).
++ *
++ * The point of the drmm_ family is that a driver need not unwind by hand:
++ * everything registered here is released in reverse order when the device
++ * goes. vc4 uses this for locks that live exactly as long as the device.
++ *
++ * Note the ordering: the mutex is initialised BEFORE the release action is
++ * registered. If the registration fails, an already-initialised mutex is
++ * destroyed rather than left live, and the caller sees the error.
++ */
++static void
++drmm_mutex_release(struct drm_device *dev __unused, void *p)
++{
++
++	linux_mutex_destroy((struct mutex *)p);
++}
++
++int
++drmm_mutex_init(struct drm_device *dev, struct mutex *lock)
++{
++	int ret;
++
++	if (dev == NULL || lock == NULL)
++		return (-EINVAL);
++
++	linux_mutex_init(lock, "drmm_mutex", SX_NOWITNESS);
++	ret = drmm_add_action(dev, drmm_mutex_release, lock);
++	if (ret != 0)
++		linux_mutex_destroy(lock);
++	return (ret);
++}
+diff --git a/include/drm/drm_managed.h b/include/drm/drm_managed.h
+index 6214fe7..7c0d3ca 100644
+--- a/include/drm/drm_managed.h
++++ b/include/drm/drm_managed.h
+@@ -16,4 +16,12 @@ void drmm_kfree(struct drm_device *, void *);
+ int drmm_add_action(struct drm_device *, drmm_func_t, void *);
+ int drmm_add_action_or_reset(struct drm_device *, drmm_func_t, void *);
+ 
++/*
++ * A mutex torn down with the device (#51). Declared with a forward struct
++ * rather than including linux/mutex.h, to keep this header's include surface
++ * as small as it already is.
++ */
++struct mutex;
++int drmm_mutex_init(struct drm_device *, struct mutex *);
++
+ #endif

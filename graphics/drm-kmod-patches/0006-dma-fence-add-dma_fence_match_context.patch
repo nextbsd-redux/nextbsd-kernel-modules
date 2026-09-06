@@ -1,0 +1,94 @@
+dma-fence: add dma_fence_match_context()
+
+Is every fence here from the given context? vc4 uses it to skip waiting on a
+fence it produced itself -- one from the caller's own context is already
+ordered by submission order, so waiting on it is pointless.
+
+Needed by the full vc4 KMS port (nextbsd-kernel-extensions#51).
+
+The array case is the one that matters for correctness, and it is why this is
+defined out of line rather than inline in dma-fence.h: walking an array needs
+dma-fence-array.h, which that header is included too widely to pull in.
+
+An array fence whose members span contexts must NOT report a match. Reporting
+one makes the caller skip a wait it genuinely needs, and that surfaces later
+as rendering against a buffer which is not ready -- a bug that would be
+extremely hard to trace back here.
+
+diff --git a/drivers/dma-buf/dma-fence.c b/drivers/dma-buf/dma-fence.c
+index 567d2ce..7217a89 100644
+--- a/drivers/dma-buf/dma-fence.c
++++ b/drivers/dma-buf/dma-fence.c
+@@ -25,6 +25,7 @@
+  */
+ 
+ #include <linux/dma-fence.h>
++#include <linux/dma-fence-array.h>	/* dma_fence_match_context (#51) */
+ #include <linux/seq_file.h>
+ 
+ MALLOC_DECLARE(M_DMABUF);
+@@ -673,3 +674,36 @@ dma_fence_wait(struct dma_fence *fence, bool intr)
+ 
+ 	return (ret < 0 ? ret : 0);
+ }
++
++
++/*
++ * See linux/dma-fence.h for why this is out of line: the array walk needs
++ * dma-fence-array.h, which that header cannot pull in.
++ */
++bool
++dma_fence_match_context(struct dma_fence *fence, u64 context)
++{
++	struct dma_fence_array *array;
++	struct dma_fence *f;
++	unsigned int i;
++
++	if (fence == NULL)
++		return (true);
++
++	if (!dma_fence_is_array(fence))
++		return (fence->context == context);
++
++	array = to_dma_fence_array(fence);
++	if (array == NULL)
++		return (fence->context == context);
++
++	/*
++	 * Every member must match. One member from another context means the
++	 * caller still has to wait, so a single mismatch fails the whole test.
++	 */
++	dma_fence_array_for_each(f, i, fence) {
++		if (f->context != context)
++			return (false);
++	}
++	return (true);
++}
+diff --git a/linuxkpi/bsd/include/linux/dma-fence.h b/linuxkpi/bsd/include/linux/dma-fence.h
+index 0d01bbd..01dd25d 100644
+--- a/linuxkpi/bsd/include/linux/dma-fence.h
++++ b/linuxkpi/bsd/include/linux/dma-fence.h
+@@ -144,4 +144,23 @@ dma_fence_is_container(struct dma_fence *fence)
+ 
+ #define	__dma_fence_might_wait	(void)
+ 
++/*
++ * dma_fence_match_context() -- is every fence here from `context`?
++ * (nextbsd-kernel-extensions#51)
++ *
++ * vc4 uses it to skip waiting on a fence it produced itself: a fence from the
++ * caller's own context is already ordered by submission order, so waiting on
++ * it is pointless.
++ *
++ * The array case is the one that matters for correctness. An array fence
++ * whose members span contexts must NOT report a match -- reporting one makes
++ * the caller skip a wait it genuinely needs, and the bug surfaces later as
++ * rendering against a buffer that is not ready.
++ *
++ * Declared here and defined out of line, because walking an array needs
++ * dma-fence-array.h and this header is included far too widely to pull that
++ * in for everyone.
++ */
++bool dma_fence_match_context(struct dma_fence *fence, u64 context);
++
+ #endif

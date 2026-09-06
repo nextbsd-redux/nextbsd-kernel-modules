@@ -1,0 +1,123 @@
+drm_plane: add chroma siting, Raspberry Pi's downstream extension
+
+vc4 feeds plane_state->chroma_siting_h/v to the polyphase filter when scaling
+YUV planes, so they decide where chroma samples land relative to luma. This is
+Raspberry Pi's addition to DRM core, not upstream.
+
+Needed by the full vc4 KMS port (nextbsd-kernel-extensions#51).
+
+Deliberately PARTIAL, and the header says so at both the struct fields and the
+function: the plane's default siting is set to 0.5/0.5 (centred) and no
+userspace property is created. The values are honoured by the driver but
+cannot be changed from userspace.
+
+Finishing it means creating two range properties, attaching them, and handling
+them in the atomic get/set plumbing so a set survives a state duplicate.
+Without that last part a set would be silently lost on the next atomic commit,
+which is worse than not offering the property at all -- hence stopping at the
+default rather than shipping half a property.
+
+diff --git a/drivers/gpu/drm/drm_color_mgmt.c b/drivers/gpu/drm/drm_color_mgmt.c
+index 3969dc5..7e78fcb 100644
+--- a/drivers/gpu/drm/drm_color_mgmt.c
++++ b/drivers/gpu/drm/drm_color_mgmt.c
+@@ -630,3 +630,42 @@ int drm_color_lut_check(const struct drm_property_blob *lut, u32 tests)
+ 	return 0;
+ }
+ EXPORT_SYMBOL(drm_color_lut_check);
++
++
++/**
++ * drm_plane_create_chroma_siting_properties - chroma sample position
++ * @plane: plane to set the defaults on
++ * @default_h: horizontal siting, 16.16 fixed point
++ * @default_v: vertical siting, 16.16 fixed point
++ *
++ * Raspberry Pi's downstream DRM extension (nextbsd-kernel-extensions#51). vc4
++ * reads plane_state->chroma_siting_h/v when scaling YUV planes through the
++ * polyphase filter.
++ *
++ * This sets the plane's current state to the given defaults and creates no
++ * userspace property, so the values are honoured by the driver but cannot be
++ * changed from userspace. That is a deliberate partial implementation, not an
++ * oversight: 0.5/0.5 (centred) is the correct default, and nothing in the
++ * display path needs to vary it yet.
++ *
++ * To finish it: create two range properties, attach them with
++ * drm_object_attach_property(), and handle them in
++ * drm_atomic_plane_set_property()/get_property() so they survive a state
++ * duplicate. Without that last part a set would be silently lost on the next
++ * atomic commit, which is worse than not offering the property at all.
++ *
++ * Returns 0.
++ */
++int
++drm_plane_create_chroma_siting_properties(struct drm_plane *plane,
++    uint32_t default_h, uint32_t default_v)
++{
++
++	if (plane == NULL)
++		return (-EINVAL);
++	if (plane->state != NULL) {
++		plane->state->chroma_siting_h = default_h;
++		plane->state->chroma_siting_v = default_v;
++	}
++	return (0);
++}
+diff --git a/include/drm/drm_color_mgmt.h b/include/drm/drm_color_mgmt.h
+index ed81741..5e3d3a4 100644
+--- a/include/drm/drm_color_mgmt.h
++++ b/include/drm/drm_color_mgmt.h
+@@ -91,6 +91,23 @@ int drm_plane_create_color_properties(struct drm_plane *plane,
+ 				      enum drm_color_encoding default_encoding,
+ 				      enum drm_color_range default_range);
+ 
++/*
++ * Chroma siting (nextbsd-kernel-extensions#51).
++ *
++ * Raspberry Pi's downstream DRM extension, used by vc4 when scaling YUV
++ * planes. This sets the plane's default siting (0.5, 0.5 -- centred) and does
++ * NOT create a userspace property: the values are honoured by the driver but
++ * not settable from userspace.
++ *
++ * Wiring the property properly would mean creating two DRM properties,
++ * attaching them to the plane, and handling them in the atomic get/set
++ * plumbing so they survive a state duplicate. That is worth doing when
++ * something needs non-default siting; until then the default is the correct
++ * answer and this is honest about being partial.
++ */
++int drm_plane_create_chroma_siting_properties(struct drm_plane *plane,
++    uint32_t default_h, uint32_t default_v);
++
+ /**
+  * enum drm_color_lut_tests - hw-specific LUT tests to perform
+  *
+diff --git a/include/drm/drm_plane.h b/include/drm/drm_plane.h
+index dd718c6..0ad34a0 100644
+--- a/include/drm/drm_plane.h
++++ b/include/drm/drm_plane.h
+@@ -176,6 +176,24 @@ struct drm_plane_state {
+ 	 */
+ 	enum drm_color_encoding color_encoding;
+ 
++	/*
++	 * Chroma sample position for YUV planes, 16.16 fixed point
++	 * (nextbsd-kernel-extensions#51).
++	 *
++	 * Raspberry Pi's downstream addition to DRM core, not upstream. vc4
++	 * feeds these to the polyphase filter when scaling YUV, so they affect
++	 * where chroma samples land relative to luma.
++	 *
++	 * Default is 0x8000 (0.5) -- sample centred -- set by
++	 * drm_plane_create_chroma_siting_properties(). There is no userspace
++	 * property behind them yet: the values are honoured by the driver but
++	 * cannot be changed from userspace, which is correct-by-default rather
++	 * than configurable. See that function for what wiring the property
++	 * would involve.
++	 */
++	uint32_t chroma_siting_h;
++	uint32_t chroma_siting_v;
++
+ 	/**
+ 	 * @color_range:
+ 	 *
