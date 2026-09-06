@@ -1640,6 +1640,58 @@ jobs:
               tar -C "artifacts/nextbsd-modules-$arch" -czf "out/nextbsd-modules-$arch.tar.gz" .
             fi
           done
+          # rpi5-overlays.tar.gz: device-tree overlays that must land on the
+          # Pi's FAT32 firmware partition, which no package can write -- pkg(8)
+          # installs into the UFS root and that partition is not mounted at
+          # install time. So the image build stages them, and gets them from
+          # here (nextbsd/nextbsd#429).
+          #
+          # Shipped from this repo rather than the image repo so an overlay
+          # stays versioned with the driver it enables: the two have to agree
+          # about the node's compatible string, and splitting them invites
+          # drift.
+          #
+          # Collected from every graphics/*/overlays directory rather than just
+          # vc4_fkms, so a module can carry its own without this step needing
+          # to be edited again. The .dtbo is committed next to its .dts --
+          # nothing here runs dtc, and a source-only overlay would tar cleanly
+          # and then not exist at boot, so the count check below is what makes
+          # that loud instead of silent.
+          _ovl_n=0
+          rm -rf out/_overlays && mkdir -p out/_overlays
+          for _d in graphics/*/overlays; do
+            [ -d "$_d" ] || continue
+            for _f in "$_d"/*.dtbo "$_d"/*.dts; do
+              [ -e "$_f" ] || continue
+              _b=$(basename "$_f")
+              if [ -e "out/_overlays/$_b" ]; then
+                echo "::error::duplicate overlay name $_b (in $_d and elsewhere)"
+                exit 1
+              fi
+              cp "$_f" out/_overlays/
+            done
+          done
+          _ovl_n=$(ls out/_overlays/*.dtbo 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$_ovl_n" -eq 0 ]; then
+            echo "::error::no .dtbo found under graphics/*/overlays -- the rpi5 image would ship without device-tree overlays and KMS would not bind"
+            exit 1
+          fi
+          # Every .dts must have its compiled .dtbo committed beside it.
+          for _s in out/_overlays/*.dts; do
+            [ -e "$_s" ] || continue
+            [ -e "${_s%.dts}.dtbo" ] || { echo "::error::$(basename "$_s") has no committed .dtbo"; exit 1; }
+          done
+          # Refuse anything that is not a flattened device tree, rather than
+          # letting the image build discover it later.
+          for _o in out/_overlays/*.dtbo; do
+            _m=$(dd if="$_o" bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \n')
+            [ "$_m" = "d00dfeed" ] || { echo "::error::$(basename "$_o") is not a device tree (magic=$_m)"; exit 1; }
+          done
+          tar -C out/_overlays -czf out/rpi5-overlays.tar.gz .
+          rm -rf out/_overlays
+          echo "==> rpi5-overlays.tar.gz ($_ovl_n overlays):"
+          tar tzf out/rpi5-overlays.tar.gz
+          ls -lh out/
           ls -lh out/
 
       # Build the SHIPPED IntelWiFi.kext (amd64) with the FULL Intel iwlwifi
