@@ -19,6 +19,7 @@
 #include <linux/platform_device.h>
 #include <linux/of.h>
 #include <linux/component.h>
+#include <linux/dma-mapping.h>
 
 #include "vc4_newbus.h"
 
@@ -60,8 +61,37 @@ vc4_newbus_attach(device_t dev, struct platform_driver *drv, const char *name)
 	INIT_LIST_HEAD(&sc->pdev.dev.devres_head);
 	spin_lock_init(&sc->pdev.dev.devres_lock);
 	INIT_LIST_HEAD(&sc->pdev.dev.irqents);
-	dev_set_name(&sc->pdev.dev, "%s", name);
+	/*
+	 * Unique per instance. A 2712 has two pixelvalves and two HDMI
+	 * controllers, and Linux gives each its own name; naming both instances
+	 * "vc4_hdmi" makes IRQ labels and every drm message that prints
+	 * dev_name() ambiguous between them.
+	 */
+	dev_set_name(&sc->pdev.dev, "%s.%d", name, device_get_unit(dev));
 	dev_set_drvdata(&sc->pdev.dev, NULL);
+
+	/*
+	 * Without dma_priv every allocator in linux_pci.c fails its
+	 * dma_priv == NULL check, and DRM_IOCTL_MODE_CREATE_DUMB returns ENOMEM
+	 * for a 1.2MB buffer on a machine with 16GB free. That was measured on
+	 * firmware KMS (nextbsd-kernel#176) and is why X could not get past
+	 * ScreenInit.
+	 *
+	 * It is worse here than it was there, because vc4_drm_bind() calls
+	 * dma_set_mask_and_coherent() and IGNORES the return -- and
+	 * dma_set_mask() returns -EIO when dma_priv is NULL. The bind would
+	 * report success and every GEM allocation afterwards would fail.
+	 *
+	 * 32-bit masks to start, matching vc4_drm_bind()'s initial
+	 * coherent_dma_mask; that function then widens both to 36 bits on
+	 * gen6 (2712), which re-inits the tag through the same path.
+	 */
+	error = linux_dma_priv_init(&sc->pdev.dev, DMA_BIT_MASK(32),
+	    DMA_BIT_MASK(32));
+	if (error != 0) {
+		device_printf(dev, "%s: dma_priv init failed: %d\n", name, error);
+		return (error);
+	}
 
 	/*
 	 * Read the IRQ number, then release the resource: the vendored driver

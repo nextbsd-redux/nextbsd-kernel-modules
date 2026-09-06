@@ -25,7 +25,7 @@
 
 SRCDIR=	${.CURDIR:H}/drivers/gpu/drm/vc4
 
-.PATH:	${SRCDIR} ${.CURDIR}
+.PATH:	${SRCDIR} ${.CURDIR} ${.CURDIR}/lkpi
 
 KMOD=	vc4_kms
 
@@ -49,6 +49,13 @@ SRCS=	\
 # The newbus shims. LinuxKPI has no platform bus, so each vendored block is
 # attached to its device-tree node by a newbus driver that calls the vendored
 # probe -- the arrangement vc4_fkms_master.c already uses on hardware.
+# Implementations behind the shadowing headers above. Renamed vc4lkpi_* by
+# those headers so they cannot collide with the kernel's own component_add()
+# and of_match_device(), which firmware KMS still runs on.
+SRCS+=	\
+	vc4_lkpi_component.c \
+	vc4_lkpi_of.c
+
 SRCS+=	\
 	vc4_newbus.c \
 	vc4_hvs_newbus.c \
@@ -83,6 +90,19 @@ CLEANFILES+= ${KMOD}.ko.full ${KMOD}.ko.debug
 
 .include "../linuxkpi_version.mk"
 .include "../compiler_flags.mk"
+
+# MODULE-LOCAL LinuxKPI, ahead of drm-kmod's and the kernel's.
+#
+# lkpi/linux/{component,of,platform_device}.h shadow the kernel's copies for
+# objects compiled into THIS module only -- drm.ko, i915, amdgpu and the kernel
+# never see them. That is deliberate: the platform-bus, component and OF
+# support vc4 needs used to live in sys/compat/linuxkpi/common/include, where
+# an include collision broke the entire amdgpu build and a struct field broke
+# KBI for every already-built module (nextbsd/nextbsd-kernel#200, #203).
+#
+# This -I MUST stay first. If it falls below the kernel's include path the
+# module silently builds against the kernel's smaller KPI instead.
+CFLAGS+= -I${.CURDIR}/lkpi
 
 CFLAGS+= -I${.CURDIR:H}/linuxkpi/gplv2/include
 CFLAGS+= -I${.CURDIR:H}/linuxkpi/bsd/include

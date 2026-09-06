@@ -14,26 +14,35 @@
  *
  * BINDING ORDER
  *
- * The vendored source documents constraints:
+ * The vendored source annotates component_drivers[] with:
  *
- *	The TXP driver needs to be bound before the PixelValves (CRTC) but
- *	after the HVS to set the possible_crtc field properly. The HDMI driver
- *	needs to be bound after the HVS so that we can lookup the HVS maximum
- *	core clock rate and figure out if we support 4kp60 or not.
+ *	The HDMI driver needs to be bound after the HVS so that we can lookup
+ *	the HVS maximum core clock rate and figure out if we support 4kp60 or
+ *	not.
  *
- * Upstream gets that ordering from component_drivers[], because
- * vc4_match_add_drivers() walks that array and the match list preserves its
- * order. Our components instead register as their newbus drivers attach, which
- * follows device-tree order -- and nothing guarantees the tree lists the HVS
- * before the HDMI.
+ * That comment is STALE on rpi-6.12.y and should not be used to reason about
+ * this: the 4kp60 decision moved into vc4_hvs_bind(), which asks the firmware
+ * mailbox directly, and every remaining vc4->hvs use in vc4_hdmi.c is a
+ * runtime callback that cannot run before drm_dev_register().
  *
- * This is a REAL RISK and is not yet handled. If HDMI binds before HVS the
- * clock-rate lookup reads an unpopulated HVS and 4kp60 support is decided
- * wrongly -- a silent misconfiguration, not a failure. Verifying the actual
- * bind order on hardware is the first thing to do once this attaches; if it is
- * wrong, the fix is for component_bind_all() to bind in match-list order
- * rather than registration order, which is what upstream effectively does.
- */
+ * The constraint that IS real is encoder-before-CRTC. vc4_crtc_bind() calls
+ * vc4_set_crtc_possible_masks(), which walks the encoders ALREADY REGISTERED
+ * on the drm_device and sets encoder->possible_crtcs. Nothing revisits it. If
+ * a pixelvalve binds before the HDMI encoders exist, those encoders keep
+ * possible_crtcs == 0, DRM has no CRTC able to drive the HDMI connectors,
+ * fbdev finds no usable CRTC, and every modeset fails while the driver reports
+ * a successful load.
+ *
+ * bcm2712's device tree is in exactly that order -- pixelvalves at 0x7c410000
+ * and 0x7c411000 come before the HDMI controllers at 0x7ef00700 and
+ * 0x7ef05700 -- so binding in registration order would hit this on every boot.
+ *
+ * It is handled in the KPI rather than here: component_bind_all() binds in
+ * the master's match-list order, the way upstream's
+ * drivers/base/component.c does (nextbsd-kernel#199). This master therefore
+ * only has to build its match list in component_drivers[] order, which
+ * vc4_match_add_drivers() already does.
+  */
 
 #include <sys/param.h>
 #include <sys/systm.h>
