@@ -35,6 +35,7 @@
 #define	LKPI_DRM_SYM(n)		LKPI_DRM_SYM1(LKPI_PFX, n)
 
 #define	drm_print_regset32	LKPI_DRM_SYM(drm_print_regset32)
+#define	lkpi_devm_ioremap	LKPI_DRM_SYM(lkpi_devm_ioremap)
 #define	drmm_mutex_init		LKPI_DRM_SYM(drmm_mutex_init)
 #define	dma_fence_match_context	LKPI_DRM_SYM(dma_fence_match_context)
 
@@ -245,6 +246,19 @@ struct drm_printer;
 struct debugfs_regset32;
 void	drm_print_regset32(struct drm_printer *p,
 	    struct debugfs_regset32 *regset);
+
+/*
+ * devm_ioremap() maps registers; LinuxKPI's returns NULL unconditionally, so
+ * vc4_hdmi failed to map all nine of its banks and reported a bare -ENOMEM.
+ * See lkpi_drm.c. Overridden as a macro because <linux/io.h> defines it as a
+ * static inline, and that header is included by drm core -- shadowing the whole
+ * header would break the rule this port arrived at the hard way.
+ */
+#include <linux/io.h>
+void	*lkpi_devm_ioremap(struct device *dev, resource_size_t offset,
+	    resource_size_t size);
+#undef devm_ioremap
+#define	devm_ioremap(dev, off, sz)	lkpi_devm_ioremap((dev), (off), (sz))
 
 struct mutex;
 struct drm_device;

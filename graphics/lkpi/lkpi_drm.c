@@ -143,3 +143,37 @@ drm_print_regset32(struct drm_printer *p __unused,
 	pr_warn_once("vc4_kms: drm_print_regset32 called -- debugfs is not "
 	    "wired up in this module (#51)\n");
 }
+
+/*
+ * devm_ioremap() -- map a device register range (#51).
+ *
+ * LinuxKPI's is a stub that returns NULL unconditionally
+ * (sys/compat/linuxkpi/common/include/linux/io.h). vc4_hdmi calls it for each
+ * of its NINE register banks, and every call site is
+ *
+ *	x = devm_ioremap(dev, res->start, resource_size(res));
+ *	if (!x)
+ *		return -ENOMEM;
+ *
+ * so the bind failed with a bare "-12" and no message from vc4 at all -- the
+ * driver thinks it is an ordinary allocation failure. That is what
+ * "lkpi component: master bind failed: -12" was, after the clocks were sorted.
+ *
+ * ioremap() itself IS implemented in LinuxKPI, as _ioremap_attr() with
+ * VM_MEMATTR_DEVICE, which is the right attribute for registers. So this is a
+ * thin wrapper over it.
+ *
+ * "devm" does not auto-release: LinuxKPI's devres does not track these
+ * mappings. A display driver maps its registers at bind and holds them until
+ * unload, so the mapping lives as long as the module -- the same bargain
+ * devm_clk_get() already makes here, and stated rather than assumed.
+ */
+void *
+lkpi_devm_ioremap(struct device *dev __unused, resource_size_t offset,
+    resource_size_t size)
+{
+
+	if (offset == 0 || size == 0)
+		return (NULL);
+	return (ioremap(offset, size));
+}
