@@ -594,19 +594,19 @@ vmemdup_user(const void __user *src, size_t len)
 }
 
 /*
- * dma_fence_match_context(): Linux' version also walks a dma_fence_array, but
- * neither drm-kmod nor linuxkpi has dma_fence_array at all -- and it is not
- * needed here. The only caller, virtio_gpu_do_fence_wait(), is reached through
- * dma_fence_unwrap_for_each(), which has already flattened any composite
- * fence, so what arrives is always a leaf. Comparing contexts directly is the
- * whole of the answer at that call site rather than an approximation of it.
+ * dma_fence_match_context() was defined here as a local shim because
+ * drm-kmod had no global one. It does now -- drm-kmod patch 0006, added for
+ * the full vc4 KMS port (nextbsd-kernel-extensions#51) -- and two definitions
+ * are a compile error, so the local copy is gone.
+ *
+ * The global version is also strictly more correct. This comment used to say
+ * "neither drm-kmod nor linuxkpi has dma_fence_array at all"; both
+ * dma_fence_is_array() and to_dma_fence_array() are in fact present, so the
+ * global one walks arrays rather than assuming a leaf. That assumption held
+ * at virtio-gpu's only call site, which is reached through
+ * dma_fence_unwrap_for_each() and therefore always sees a flattened fence --
+ * so nothing changes here, but it no longer depends on the caller.
  */
-static inline bool
-dma_fence_match_context(struct dma_fence *fence, uint64_t context)
-{
-
-	return (fence->context == context);
-}
 
 /*
  * dma_sync_sgtable_for_device(): linuxkpi has the per-scatterlist call but not
