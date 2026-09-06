@@ -270,7 +270,15 @@ static void vc4_match_add_drivers(struct device *dev,
 	int i;
 
 	for (i = 0; i < count; i++) {
-		struct device_driver *drv = &drivers[i]->driver;
+		/*
+		 * DEVIATION (#51): struct lkpi_driver, not struct
+		 * device_driver. The kernel's device_driver has no
+		 * of_match_table and is shared with drm.ko, so a module cannot
+		 * add one; struct platform_driver carries its own type here
+		 * instead. Same member names, so every initialiser below is
+		 * unchanged.
+		 */
+		const struct lkpi_driver *drv = &drivers[i]->driver;
 		struct device *p = NULL, *d;
 
 		while ((d = platform_find_device_by_driver(p, drv))) {

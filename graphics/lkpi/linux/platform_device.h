@@ -102,6 +102,9 @@
 #define	LKPI_SYM1(p, n)	LKPI_SYM2(p, n)
 #define	LKPI_SYM(n)	LKPI_SYM1(LKPI_PFX, n)
 
+#define	lkpi_platform_device_register	LKPI_SYM(lkpi_platform_device_register)
+#define	lkpi_platform_device_unregister	LKPI_SYM(lkpi_platform_device_unregister)
+#define	platform_find_device_by_driver	LKPI_SYM(platform_find_device_by_driver)
 #define	lkpi_platform_get_irq	LKPI_SYM(lkpi_platform_get_irq)
 #define	lkpi_platform_get_irq_byname	LKPI_SYM(lkpi_platform_get_irq_byname)
 #define	lkpi_platform_ioremap_resource	LKPI_SYM(lkpi_platform_ioremap_resource)
@@ -278,15 +281,36 @@ devm_platform_ioremap_resource(struct platform_device *pdev, unsigned int index)
 }
 
 /*
- * platform_find_device_by_driver() is deliberately NOT implemented (#51).
+ * The platform-device registry (#51).
  *
- * vc4_drv.c uses it to enumerate every device bound to a component driver.
- * There is nothing to enumerate: platform_driver_register() below is a stub
- * returning -ENXIO, so no platform driver is ever bound and no
- * device_t -> struct device registry exists. Returning NULL would compile and
- * then silently build an empty component match list, failing later and further
- * away. Left as a compile error until the platform bus underneath is real.
+ * vc4_match_add_drivers() builds the master's component match list by asking,
+ * for each driver in component_drivers[], "which devices are bound to this?"
+ * -- that is platform_find_device_by_driver(). LinuxKPI has no platform bus,
+ * so there was nothing to answer with and the call was left as a deliberate
+ * compile error rather than a stub returning NULL.
+ *
+ * Returning NULL would have been much worse than a build failure. An empty
+ * match list is COMPLETE by definition, so the master would bind immediately
+ * with zero components, report success, and leave the display dark. Nothing
+ * about that failure points at its cause.
+ *
+ * The newbus shims already construct one struct platform_device per attached
+ * block, so the registry is simply those, recorded at attach and removed at
+ * detach. Enumeration takes a `start` device and returns the next match after
+ * it, which is the iterator vc4_match_add_drivers() expects.
  */
+void	lkpi_platform_device_register(struct platform_device *pdev,
+	    const struct lkpi_driver *drv);
+void	lkpi_platform_device_unregister(struct platform_device *pdev);
+
+/*
+ * Note the driver type: struct lkpi_driver, not struct device_driver. See the
+ * comment on struct platform_driver above -- the kernel's device_driver has no
+ * of_match_table, and it is shared with drm.ko so a module cannot add one.
+ * vc4_match_add_drivers() is deviated by one line to match.
+ */
+struct device *platform_find_device_by_driver(struct device *start,
+	    const struct lkpi_driver *drv);
 
 static __inline int platform_driver_register(struct platform_driver *pdrv);
 static __inline void platform_driver_unregister(struct platform_driver *pdrv);
