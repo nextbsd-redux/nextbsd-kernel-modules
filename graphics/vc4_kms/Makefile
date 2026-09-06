@@ -42,9 +42,7 @@ SRCS=	\
 	vc4_plane.c \
 	vc4_hdmi.c \
 	vc4_hdmi_phy.c \
-	vc4_bo.c \
-	vc4_gem.c \
-	vc4_fence.c
+	vc4_bo.c
 
 # The newbus shims. LinuxKPI has no platform bus, so each vendored block is
 # attached to its device-tree node by a newbus driver that calls the vendored
@@ -56,6 +54,13 @@ SRCS+=	\
 	lkpi_component.c \
 	lkpi_of.c \
 	lkpi_drm.c
+
+# The GEN_4 render path is not built -- vc5_drm_driver registers no ioctls and
+# no DRIVER_RENDER, so vc4_gem.c/vc4_fence.c and the v3d, validate, render_cl
+# and perfmon sources are unreachable on 2712. These stand in for the symbols
+# vc4_drv.c still names in that unreachable ioctl table.
+SRCS+=	\
+	vc4_gen4_render_stubs.c
 
 SRCS+=	\
 	vc4_newbus.c \
