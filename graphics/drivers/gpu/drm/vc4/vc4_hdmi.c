@@ -3290,11 +3290,29 @@ static int vc5_hdmi_init_resources(struct drm_device *drm,
 
 	vc4_hdmi->cec_clock = devm_clk_get_optional(dev, "cec");
 
-	vc4_hdmi->reset = devm_reset_control_get(dev, NULL);
-	if (IS_ERR(vc4_hdmi->reset)) {
-		drm_err(drm, "Failed to get HDMI reset line\n");
-		return PTR_ERR(vc4_hdmi->reset);
-	}
+	/*
+	 * DEVIATION (#51): the reset is OPTIONAL.
+	 *
+	 * The device tree does give hdmi0 a reset -- resets = <&dvp 1> -- but
+	 * dvp has no FreeBSD reset-controller driver, so there is nothing to
+	 * ask. devm_reset_control_get() returns -ENOENT and upstream treats
+	 * that as fatal:
+	 *
+	 *	vc40: [drm] *ERROR* Failed to get HDMI reset line
+	 *	lkpi component: master bind failed: -2
+	 *
+	 * measured on a Pi 500+. graphics/include/linux/reset.h already
+	 * describes the intended behaviour -- "the driver skips the reset",
+	 * because on BCM2712 the firmware brings the HDMI block out of reset
+	 * before the OS runs -- and this is the call site that has to agree
+	 * with it. reset_control_reset(NULL) is already a no-op there.
+	 *
+	 * A part that genuinely needed an explicit reset would come up in an
+	 * undefined state. This one does not: the firmware has already
+	 * initialised it, which is the same reason firmware KMS can drive the
+	 * display without touching a reset controller.
+	 */
+	vc4_hdmi->reset = devm_reset_control_get_optional(dev, NULL);
 
 	ret = vc4_hdmi_build_regset(drm, vc4_hdmi, &vc4_hdmi->hdmi_regset, VC4_HDMI);
 	if (ret)
